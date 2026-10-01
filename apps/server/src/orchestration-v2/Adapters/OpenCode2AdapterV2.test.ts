@@ -882,6 +882,195 @@ describe("OpenCode2 adapter", () => {
     }).pipe(Effect.scoped),
   );
 
+  /**
+   * A foreground subagent starts one in the background and returns, so the
+   * thread's turn ends while that one runs. Frames as 2.0.18 sent them in a
+   * live run with `subagent_depth` 2, ids shortened.
+   */
+  const MIDDLE = "ses_middle0000000000000000000";
+  const DEEP = "ses_grandchild00000000000000";
+  const toolOf = (session: string, id: string) => ({
+    sessionID: session,
+    assistantMessageID: `msg_assistant_${id}`,
+    id,
+  });
+  const deepReport = (state: "completed" | "cancelled") =>
+    event("session.inbox.enqueued", {
+      inboxID: "msg_deep_report",
+      sessionID: MIDDLE,
+      item: {
+        type: "synthetic",
+        payload: {
+          text: `<subagent sessionID="${DEEP}" state="${state}" description="Deep">\nDEEP_OK\n</subagent>`,
+          description: "Deep",
+          metadata: { source: "subagent", childID: DEEP, agent: "General", state },
+        },
+        delivery: "steer",
+      },
+    });
+  const nestedLaunch: ReadonlyArray<ProviderReplayEntry> = [
+    out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+    promptAccepted,
+    event("session.execution.started", { sessionID: SESSION }),
+    event("session.tool.input.started", { ...toolOf(SESSION, "call-middle"), name: "subagent" }),
+    event("session.tool.called", {
+      ...toolOf(SESSION, "call-middle"),
+      name: "subagent",
+      input: { description: "Middle", prompt: "delegate" },
+      executed: false,
+    }),
+    event("session.created", { ...childCreated(MIDDLE), title: "Middle" }),
+    event("session.tool.progress", {
+      ...toolOf(SESSION, "call-middle"),
+      metadata: { sessionID: MIDDLE, status: "running" },
+    }),
+    event("session.execution.started", { sessionID: MIDDLE }),
+    event("session.tool.input.started", { ...toolOf(MIDDLE, "call-deep"), name: "subagent" }),
+    event("session.tool.called", {
+      ...toolOf(MIDDLE, "call-deep"),
+      name: "subagent",
+      input: { description: "Deep", prompt: "sleep", background: true },
+      executed: false,
+    }),
+    event("session.created", { ...childCreated(DEEP), parentID: MIDDLE, title: "Deep" }),
+    event("session.tool.progress", {
+      ...toolOf(MIDDLE, "call-deep"),
+      metadata: { sessionID: DEEP, status: "running" },
+    }),
+    event("session.tool.success", {
+      ...toolOf(MIDDLE, "call-deep"),
+      content: [{ type: "text", text: "The subagent is working in the background." }],
+      metadata: { sessionID: DEEP, status: "running", truncated: false },
+      executed: false,
+    }),
+    event("session.execution.started", { sessionID: DEEP }),
+    event("session.execution.succeeded", { sessionID: MIDDLE }),
+    event("session.tool.success", {
+      ...toolOf(SESSION, "call-middle"),
+      content: [{ type: "text", text: `<subagent sessionID="${MIDDLE}" state="completed">` }],
+      metadata: { sessionID: MIDDLE, status: "completed", truncated: false },
+      executed: false,
+    }),
+    event("session.execution.succeeded", { sessionID: SESSION }),
+  ];
+  /** The runtime's events, with the background subagent's statuses and the middle session's turns. */
+  const watchNested = (runtime: ProviderAdapterV2SessionRuntime) =>
+    Effect.gen(function* () {
+      const deep: Array<string> = [];
+      const middleTurns = new Map<string, string>();
+      const terminals: Array<string> = [];
+      const changed = yield* Deferred.make<void>();
+      let wake = changed;
+      yield* runtime.events.pipe(
+        Stream.tap((event) =>
+          Effect.gen(function* () {
+            if (event.type === "turn.terminal") terminals.push(event.status);
+            if (event.type === "subagent.updated" && event.subagent.title === "Deep") {
+              deep.push(event.subagent.status);
+            }
+            const native = event.type === "provider_turn.updated" ? event.providerTurn : undefined;
+            const id = native?.nativeTurnRef?.nativeId;
+            if (native !== undefined && id?.startsWith(`${MIDDLE}:turn:`) === true) {
+              middleTurns.set(id, native.status);
+            }
+            yield* Deferred.succeed(wake, undefined);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.forkScoped,
+      );
+      /** Waits until `check` holds for what the runtime emitted. */
+      const until = (check: () => boolean): Effect.Effect<void> =>
+        Effect.suspend(() => {
+          if (check()) return Effect.void;
+          return Effect.gen(function* () {
+            wake = yield* Deferred.make<void>();
+            if (check()) return;
+            yield* Deferred.await(wake);
+            yield* until(check);
+          });
+        });
+      return { deep, middleTurns, terminals, until };
+    });
+
+  it.effect("stops a foreground subagent's background subagent after the turn ended", () =>
+    Effect.gen(function* () {
+      const offered = yield* Deferred.make<void>();
+      const { runtime, thread } = yield* resumed([
+        ...nestedLaunch,
+        // The Stop reaches the background subagent. OpenCode reports it to the
+        // middle session and wakes that session, which is stopped as well.
+        out("session.interrupt", { sessionID: DEEP }),
+        reply("session.interrupt", { interrupted: true }),
+        event("session.execution.interrupted", { sessionID: DEEP }),
+        deepReport("cancelled"),
+        event("session.execution.started", { sessionID: MIDDLE }),
+        out("session.interrupt", { sessionID: MIDDLE }),
+        reply("session.interrupt", { interrupted: true }),
+        event("session.execution.interrupted", { sessionID: MIDDLE }),
+        // Later OpenCode runs the thread's own session by itself: a follow-up
+        // T3 offers a turn for, which marks that everything above was handled.
+        event("session.execution.started", { sessionID: SESSION }),
+      ]).pipe(
+        Effect.provideService(ProviderContinuationRequests.ProviderContinuationRequests, {
+          offer: () => Deferred.succeed(offered, undefined).pipe(Effect.asVoid),
+          take: Effect.never,
+        }),
+      );
+      const watch = yield* watchNested(runtime);
+      yield* runtime.startTurn(withLineage(thread));
+      yield* watch.until(() => watch.terminals.length > 0);
+      assert.deepEqual(watch.terminals, ["completed"]);
+      // The middle call ended; the subagent it started runs on, and keeps the thread busy.
+      assert.equal(watch.deep.at(-1), "running");
+      assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
+      yield* runtime.interruptTurn({
+        providerThread: thread,
+        providerTurnId: yield* providerTurnId,
+        requestRuntimeRestart: true,
+      });
+      yield* Deferred.await(offered);
+      assert.equal(watch.deep.at(-1), "interrupted");
+      // The replay fails on any request but the stops above, and no turn
+      // opened for the middle session's stopped wake.
+      assert.deepEqual([...watch.middleTurns.keys()], [`${MIDDLE}:turn:1`]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("stops the turn a foreground subagent runs to answer its background subagent", () =>
+    Effect.gen(function* () {
+      const { runtime, thread } = yield* resumed([
+        ...nestedLaunch,
+        // The background subagent ends; OpenCode wakes the middle session to answer it.
+        event("session.execution.succeeded", { sessionID: DEEP }),
+        deepReport("completed"),
+        event("session.execution.started", { sessionID: MIDDLE }),
+        event("session.text.ended", {
+          sessionID: MIDDLE,
+          assistantMessageID: "msg_assistant_answer",
+          ordinal: 0,
+          text: "Noted.",
+        }),
+        out("session.interrupt", { sessionID: MIDDLE }),
+        reply("session.interrupt", { interrupted: true }),
+        event("session.execution.interrupted", { sessionID: MIDDLE }),
+      ]);
+      const watch = yield* watchNested(runtime);
+      yield* runtime.startTurn(withLineage(thread));
+      yield* watch.until(() => watch.middleTurns.get(`${MIDDLE}:turn:2`) === "running");
+      assert.equal(watch.deep.at(-1), "completed");
+      // Its answer still runs after the thread's turn ended.
+      assert.isTrue(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
+      yield* runtime.interruptTurn({
+        providerThread: thread,
+        providerTurnId: yield* providerTurnId,
+        requestRuntimeRestart: true,
+      });
+      yield* watch.until(() => watch.middleTurns.get(`${MIDDLE}:turn:2`) === "interrupted");
+      assert.isFalse(yield* runtime.hasPendingBackgroundWorkForThread!(thread));
+    }).pipe(Effect.scoped),
+  );
+
   /** A prompt accepted, then a Stop the server never answers, advanced past its timeout. */
   const stopTimedOut: ReadonlyArray<ProviderReplayEntry> = [
     out("session.prompt", { sessionID: SESSION, text: "<any>" }),

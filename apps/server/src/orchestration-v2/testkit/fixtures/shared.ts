@@ -86,6 +86,8 @@ export const OPENCODE2_QUESTION_PROMPT =
   "Before doing anything, use the question tool to ask me which color I prefer, offering the options red and blue. After I answer, reply with only the chosen color.";
 export const OPENCODE2_SUBAGENT_PROMPT =
   "Use the subagent tool to delegate to the explore subagent with the prompt: 'List the files in the current directory and report their names.' Wait for it, then summarize its answer in one line.";
+export const OPENCODE2_NESTED_BACKGROUND_PROMPT =
+  "Use the subagent tool (foreground, do not set background) to delegate to the general subagent with this exact prompt: 'Use the subagent tool with background set to true to delegate to the general subagent with the prompt: Run the shell command `sleep 25` with the shell tool, then reply exactly GRANDCHILD_OK. As soon as it is launched, reply exactly MIDDLE_OK and end your turn without waiting for it.' Wait for that subagent to return, then reply exactly ROOT_OK.";
 export const OPENCODE2_BACKGROUND_PROMPT =
   "Use the subagent tool with background enabled to delegate to the general subagent with the prompt: 'Run the shell command `sleep 20` with the bash tool and then reply exactly CHILD_OK.' As soon as it is launched, reply exactly PARENT_OK and end your turn without waiting for it.";
 export const TURN_INTERRUPT_PROMPT =
@@ -1176,11 +1178,20 @@ export function assertProviderNativeSubagentRootTurns(result: OrchestratorV2Scen
           ? [event.payload.status]
           : [],
       );
+      const rootActivity = activity(rootEvents.map((event) => event.status));
+      const subagentActivity = activity(subagentStatuses);
+      // A subagent can be woken after its call ended, to answer the report of
+      // a background subagent of its own; each of those turns ends too.
+      const wokenAfterEnd =
+        child.subagents.length > 0 && rootActivity.length > subagentActivity.length;
       assert.deepEqual(
-        activity(rootEvents.map((event) => event.status)),
-        activity(subagentStatuses),
+        wokenAfterEnd ? rootActivity.slice(0, subagentActivity.length) : rootActivity,
+        subagentActivity,
         `child ${childThreadId} root turn must follow subagent ${subagent.id}`,
       );
+      if (wokenAfterEnd) {
+        assert.notEqual(rootActivity.at(-1), "active", `child ${childThreadId} must end its turns`);
+      }
     }
   }
 }

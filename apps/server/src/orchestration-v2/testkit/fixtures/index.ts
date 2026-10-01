@@ -67,6 +67,8 @@ import { openCode2QuestionInput } from "./opencode2_question/input.ts";
 import { assertOpenCode2QuestionOutput } from "./opencode2_question/output.ts";
 import { openCode2BackgroundInput } from "./opencode2_background/input.ts";
 import { assertOpenCode2BackgroundOutput } from "./opencode2_background/output.ts";
+import { openCode2NestedBackgroundInput } from "./opencode2_nested_background/input.ts";
+import { assertOpenCode2NestedBackgroundOutput } from "./opencode2_nested_background/output.ts";
 import { openCode2SubagentInput } from "./opencode2_subagent/input.ts";
 import { assertOpenCode2SubagentOutput } from "./opencode2_subagent/output.ts";
 import { openCode2SimpleInput } from "./opencode2_simple/input.ts";
@@ -922,6 +924,24 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         },
         runContinuationWorker: true,
         assertOutput: assertOpenCode2BackgroundOutput,
+      },
+    ],
+  },
+  {
+    name: "opencode2_nested_background",
+    buildInput: openCode2NestedBackgroundInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("opencode"),
+        transcriptFile: new URL(
+          "./opencode2_nested_background/opencode_transcript.ndjson",
+          import.meta.url,
+        ),
+        modelSelection: {
+          instanceId: OPENCODE2_MODEL_SELECTION.instanceId,
+          model: "openrouter/deepseek/deepseek-v4-flash",
+        },
+        assertOutput: assertOpenCode2NestedBackgroundOutput,
       },
     ],
   },

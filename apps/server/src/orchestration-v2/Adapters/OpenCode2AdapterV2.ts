@@ -802,12 +802,23 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       return current;
     };
 
-    /** A thread's `subagent` calls still running, its subagents' included. */
-    const runningCalls = (state: ThreadState): ReadonlyArray<SubagentCall> =>
-      [...state.calls.values()].flatMap((call) => [
-        call,
-        ...(call.child === undefined ? [] : runningCalls(call.child)),
-      ]);
+    /** A thread's session and its subagents' sessions, through any nesting. */
+    const sessionsOf = (thread: ThreadState): ReadonlyArray<ThreadState> => [
+      thread,
+      ...[...threads.values()].filter((state) => {
+        for (let above = state.subagent?.call.state; above; above = above.subagent?.call.state) {
+          if (above === thread) return true;
+        }
+        return false;
+      }),
+    ];
+
+    /**
+     * A thread's `subagent` calls still running, its subagents' included: a
+     * subagent's background call runs on after the call that made it ended.
+     */
+    const runningCalls = (thread: ThreadState): ReadonlyArray<SubagentCall> =>
+      sessionsOf(thread).flatMap((state) => [...state.calls.values()]);
 
     /** The `subagent` calls that lead to a session, from its own up to the thread's. */
     const callsAbove = (sessionId: string) => {
@@ -838,16 +849,19 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
     };
 
     /**
-     * Work that outlives the thread's turn: background subagents, held
-     * executions, and reports OpenCode queued for the follow-up it will start,
-     * on the thread's own session or on a subagent's for a nested one.
+     * What a session still owes its thread once the thread's turn ended:
+     * background subagents, held executions, reports OpenCode queued for the
+     * follow-up it will start, and anything a subagent's session still runs,
+     * such as its own follow-up to such a report.
      */
-    const hasBackground = (state: ThreadState) =>
+    const owesWork = (state: ThreadState) =>
       state.wakes.length > 0 ||
       state.reports.size > 0 ||
-      runningCalls(state).some(
-        (call) => call.background || (call.child !== undefined && call.child.reports.size > 0),
-      );
+      (state.subagent !== undefined && busy.has(state.sessionId)) ||
+      [...state.calls.values()].some((call) => call.background);
+
+    /** Work that outlives the thread's turn, on its own session or its subagents'. */
+    const hasBackground = (thread: ThreadState) => sessionsOf(thread).some(owesWork);
 
     const setSessionStatus = (
       status: OrchestrationV2ProviderSession["status"],
@@ -1284,7 +1298,11 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       }
     });
 
-    /** Ends a subagent call and every call under it that is still running. */
+    /**
+     * Ends a subagent call and every call under it that is still running. A
+     * background one outlives the call that made it, as it outlives a turn,
+     * unless that call failed.
+     */
     const settleCall: (
       call: SubagentCall,
       status: OrchestrationV2Subagent["status"],
@@ -1299,6 +1317,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       if (child !== undefined) {
         // A snapshot: settling a call removes it from the map.
         for (const nested of Array.from(child.calls.values())) {
+          if (nested.background && status !== "failed") continue;
           yield* settleCall(nested, status === "completed" ? "interrupted" : status);
         }
         if (child.active !== undefined && status !== "completed") {
@@ -2791,8 +2810,16 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
      */
     const stopBackground = Effect.fnUntraced(function* (state: ThreadState) {
       const calls = runningCalls(state).filter((call) => call.background);
-      // Every session under the thread that a stopped subagent reports to.
-      const callers = [state, ...runningCalls(state).flatMap((call) => call.child ?? [])];
+      // Every session under the thread, which a stopped subagent may report to.
+      const callers = sessionsOf(state);
+      // A subagent whose call ended runs again when OpenCode wakes it to
+      // answer a report of its own background subagent.
+      const followUps = callers.filter(
+        (caller) =>
+          caller.subagent !== undefined &&
+          busy.has(caller.sessionId) &&
+          !isOrchestrationV2WorkActive(caller.subagent.call.status),
+      );
       // OpenCode announces a child's session before the call's progress names
       // it, so a call without a child yet is stopped through its caller's
       // announced children.
@@ -2823,6 +2850,16 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
             Effect.map(Exit.isSuccess),
           );
         if (!reached) unreached.add(childId);
+      }
+      // Its end closes its turn; one the Stop did not reach stays pending work.
+      for (const followUp of followUps) {
+        yield* client.session
+          .interrupt({ sessionID: Session.ID.make(followUp.sessionId) })
+          .pipe(
+            Effect.catchTags({ SessionNotFoundError: () => Effect.void }),
+            Effect.timeout(INTERRUPT_TIMEOUT),
+            Effect.ignore({ log: true }),
+          );
       }
       yield* lock.withPermit(
         Effect.gen(function* () {
@@ -2859,12 +2896,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       events: Stream.fromQueue(events),
       // A background subagent keeps its session busy after its parent's turn,
       // and a held wake still needs its turn: idle release must wait for both.
-      hasPendingBackgroundWork: Effect.sync(() =>
-        [...threads.values()].some(
-          (state) =>
-            hasBackground(state) || (state.subagent !== undefined && busy.has(state.sessionId)),
-        ),
-      ),
+      hasPendingBackgroundWork: Effect.sync(() => [...threads.values()].some(owesWork)),
       hasPendingBackgroundWorkForThread: (providerThread) =>
         Effect.sync(() => {
           const nativeId = providerThread.nativeThreadRef?.nativeId;
