@@ -232,6 +232,7 @@ export const make = Effect.gen(function* () {
       environmentThemes: true,
       usageLimitSources: true,
       usagePriceOverrides: true,
+      openRouter: true,
       threadPinning: true,
       threadPinReorder: true,
       threadActiveReorder: true,

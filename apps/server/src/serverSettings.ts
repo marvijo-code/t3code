@@ -57,6 +57,7 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import { resolveOpenRouterSettingsPatch } from "./provider/openRouterInstances.ts";
 
 export { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
 
@@ -155,6 +156,7 @@ const BITBUCKET_SECRET_NAMES = {
   apiToken: "bitbucket-api-token",
 } as const;
 const BITBUCKET_SECRET_FIELDS = ["accessToken", "apiToken"] as const;
+const OPENROUTER_SECRET_NAME = "openrouter-api-key";
 
 const redactSecret = (value: string) => (value.length > 0 ? SECRET_REDACTED : "");
 
@@ -199,7 +201,11 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
     accessToken: redactSecret(settings.bitbucket.accessToken),
     apiToken: redactSecret(settings.bitbucket.apiToken),
   };
-  return { ...settings, providerInstances, usageLimitSources, bitbucket };
+  const openRouter = {
+    ...settings.openRouter,
+    apiKey: redactSecret(settings.openRouter.apiKey),
+  };
+  return { ...settings, providerInstances, usageLimitSources, bitbucket, openRouter };
 }
 
 export class ServerSettingsService extends Context.Service<
@@ -765,11 +771,26 @@ const make = Effect.gen(function* () {
           );
         bitbucket[field] = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
       }
+      let openRouter = settings.openRouter;
+      if (openRouter.apiKey === SECRET_REDACTED) {
+        const secret = yield* secretStore
+          .get(OPENROUTER_SECRET_NAME)
+          .pipe(
+            Effect.mapError(
+              (cause) => new ServerSettingsError({ settingsPath, operation: "read-secret", cause }),
+            ),
+          );
+        openRouter = {
+          ...openRouter,
+          apiKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
+        };
+      }
       return {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
         bitbucket,
+        openRouter,
       };
     });
 
@@ -930,12 +951,32 @@ const make = Effect.gen(function* () {
         bitbucket[field] = SECRET_REDACTED;
       }
 
+      let openRouter = next.openRouter;
+      if (openRouter.apiKey !== SECRET_REDACTED) {
+        if (openRouter.apiKey.length > 0) {
+          changes.push({
+            kind: "write",
+            secretName: OPENROUTER_SECRET_NAME,
+            value: textEncoder.encode(openRouter.apiKey),
+          });
+          openRouter = { ...openRouter, apiKey: SECRET_REDACTED };
+        } else if (current.openRouter.apiKey.length > 0) {
+          // Only when a key was saved: every other settings write would otherwise touch the store.
+          changes.push({
+            kind: "remove",
+            secretName: OPENROUTER_SECRET_NAME,
+            operation: "remove-secret",
+          });
+        }
+      }
+
       return {
         settings: {
           ...next,
           providerInstances: providerInstances as ServerSettings["providerInstances"],
           usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
           bitbucket,
+          openRouter,
         },
         changes,
       };
@@ -1023,7 +1064,21 @@ const make = Effect.gen(function* () {
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
-        const updated = applyServerSettingsPatch(current, patch);
+        const patched = applyServerSettingsPatch(current, patch);
+        const newApiKey = patch.openRouter?.apiKey;
+        // The OpenRouter key is copied into the managed instances, so a key
+        // written through any patch must rewrite them too (one writer).
+        const updated =
+          newApiKey === undefined || newApiKey === SECRET_REDACTED
+            ? patched
+            : yield* materializeProviderEnvironmentSecrets(patched).pipe(
+                Effect.map((clear) =>
+                  applyServerSettingsPatch(
+                    clear,
+                    resolveOpenRouterSettingsPatch(clear, { apiKey: newApiKey }),
+                  ),
+                ),
+              );
         const persisted = yield* persistProviderEnvironmentSecrets(current, updated);
         const next = yield* normalizeServerSettings(persisted.settings);
         const materialized = yield* Effect.uninterruptibleMask(() =>

@@ -59,6 +59,7 @@ import { CursorDriver } from "../Drivers/CursorDriver.ts";
 import { GrokDriver } from "../Drivers/GrokDriver.ts";
 import { OpenCodeDriver } from "../Drivers/OpenCodeDriver.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as OpenRouter from "../OpenRouter.ts";
 import { OpenCodeRuntimeLive } from "../opencodeRuntime.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "./ProviderEventLoggers.ts";
@@ -72,6 +73,10 @@ const TestHttpClientLive = Layer.succeed(
 );
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
+const OPENROUTER_TEST_CATALOG = [
+  { id: "openai/model-b", name: "OpenAI: Model B" },
+  { id: "anthropic/model-a", name: "Anthropic: Model A" },
+];
 
 const BackgroundPolicyAlwaysRunLayer = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
   reportClientActivity: () => Effect.void,
@@ -266,6 +271,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
     Layer.provideMerge(TestHttpClientLive),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     Layer.provideMerge(ModelManifest.layerTest),
+    Layer.provideMerge(OpenRouter.layerTest(OPENROUTER_TEST_CATALOG)),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
 
@@ -635,6 +641,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
     Layer.provideMerge(TestHttpClientLive),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     Layer.provideMerge(ModelManifest.layerTest),
+    Layer.provideMerge(OpenRouter.layerTest(OPENROUTER_TEST_CATALOG)),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
 
@@ -796,6 +803,80 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       expect(openCodeSnapshot.continuation?.groupKey).toBe(
         `${openCodeDriverKind}:instance:${openCodeId}`,
       );
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.live("lists the OpenRouter catalog on the reserved OpenRouter instances only", () =>
+    Effect.gen(function* () {
+      const codexDriverKind = ProviderDriverKind.make("codex");
+      const claudeDriverKind = ProviderDriverKind.make("claudeAgent");
+      const openCodeDriverKind = ProviderDriverKind.make("opencode");
+      const openRouterCodex = ProviderInstanceId.make("openrouter_codex");
+      const openRouterClaude = ProviderInstanceId.make("openrouter_claude");
+      const openRouterOpenCode = ProviderInstanceId.make("openrouter_opencode");
+      const plainCodex = ProviderInstanceId.make("codex_plain");
+      const plainClaude = ProviderInstanceId.make("claude_plain");
+
+      const { registry } = yield* makeProviderInstanceRegistry<BuiltInDriversEnv>({
+        drivers: [CodexDriver, ClaudeDriver, OpenCodeDriver],
+        configMap: {
+          [openRouterCodex]: {
+            driver: codexDriverKind,
+            enabled: false,
+            config: makeCodexConfig({}),
+          },
+          [openRouterClaude]: {
+            driver: claudeDriverKind,
+            enabled: false,
+            config: makeClaudeConfig({}),
+          },
+          [openRouterOpenCode]: {
+            driver: openCodeDriverKind,
+            enabled: false,
+            config: makeOpenCodeConfig({}),
+          },
+          [plainCodex]: { driver: codexDriverKind, enabled: false, config: makeCodexConfig({}) },
+          [plainClaude]: { driver: claudeDriverKind, enabled: false, config: makeClaudeConfig({}) },
+        },
+      });
+      const slugs = (instanceId: ProviderInstanceId, read: "pending" | "checked") =>
+        Effect.gen(function* () {
+          const instance = yield* registry.getInstance(instanceId);
+          const snapshot =
+            read === "pending"
+              ? yield* instance!.snapshot.getSnapshot
+              : yield* instance!.snapshot.refresh;
+          return {
+            slugs: snapshot.models.map((model) => model.slug),
+            defaults: snapshot.models.filter((model) => model.isDefault).map((model) => model.slug),
+            groupKey: snapshot.continuation?.groupKey,
+            continuationKey: instance!.continuationIdentity.continuationKey,
+          };
+        });
+
+      for (const read of ["pending", "checked"] as const) {
+        const codex = yield* slugs(openRouterCodex, read);
+        expect(codex.slugs).toEqual(["openai/model-b", "anthropic/model-a"]);
+        expect(codex.defaults).toEqual(["openai/model-b"]);
+        const claude = yield* slugs(openRouterClaude, read);
+        expect(claude.slugs).toEqual(["openai/model-b", "anthropic/model-a"]);
+        expect(claude.defaults).toEqual(["anthropic/model-a"]);
+        expect((yield* slugs(openRouterOpenCode, read)).slugs).toEqual([
+          "openrouter/openai/model-b",
+          "openrouter/anthropic/model-a",
+        ]);
+        expect((yield* slugs(plainCodex, read)).slugs).toEqual([]);
+        expect((yield* slugs(plainClaude, read)).slugs).not.toContain("anthropic/model-a");
+      }
+
+      const managedCodex = yield* slugs(openRouterCodex, "pending");
+      const ordinaryCodex = yield* slugs(plainCodex, "pending");
+      expect(managedCodex.continuationKey).toBe(`${ordinaryCodex.continuationKey}:openrouter`);
+      expect(managedCodex.groupKey).toBe(managedCodex.continuationKey);
+      const managedClaude = yield* slugs(openRouterClaude, "pending");
+      const ordinaryClaude = yield* slugs(plainClaude, "pending");
+      expect(managedClaude.continuationKey).toBe(`${ordinaryClaude.continuationKey}:openrouter`);
+      expect(managedClaude.groupKey).toBe(managedClaude.continuationKey);
     }).pipe(Effect.provide(testLayer)),
   );
 });

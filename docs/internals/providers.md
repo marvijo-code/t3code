@@ -35,6 +35,31 @@ client connections and provider-instance rebuilds. Releases are immutable, with 
 selecting the version for new processes. Running processes hold leases on their version. Updates
 and removal must respect those leases instead of replacing executables under a running agent.
 
+## OpenRouter instances are ordinary instances
+
+OpenRouter setup does not add a driver. Each harness gets an ordinary provider instance under a
+reserved id, listed in the [contract](../../packages/contracts/src/openRouter.ts), whose environment
+and launch arguments route the harness to OpenRouter. Terminals, usage scanning, and session import
+read instance environments straight from settings, so deriving these instances at spawn time would
+hide them from those readers.
+
+Each instance carries its own copy of the key, and `updateSettings` is the single writer that keeps
+those copies in step with `openRouter.apiKey`: any patch that sets the key rewrites the instances,
+so `server.configureOpenRouter` and a plain settings patch cannot disagree. See the
+[instance builder](../../apps/server/src/provider/openRouterInstances.ts).
+
+A managed Codex instance keeps its routing in its launch arguments. `T3CODE_CODEX_LAUNCH_ARGS`
+normally replaces instance launch arguments, so the Codex driver folds that override into the
+managed instance's arguments instead of letting it drop the routing.
+
+A driver treats a reserved id as OpenRouter in two ways. It replaces the snapshot's model list with
+the OpenRouter catalog, on the pending snapshot too, because the registry retains missing models for
+some drivers. And it suffixes the Codex and Claude continuation keys, which otherwise follow the home
+directory these instances share with the direct ones, so a thread cannot resume across backends.
+
+The catalog is fetched only while an enabled OpenRouter instance is probed. An environment that
+never sets OpenRouter up must not contact it. See the [service](../../apps/server/src/provider/OpenRouter.ts).
+
 ## Setup must not happen as a health-check side effect
 
 Opening a provider session can start MCP servers, run hooks, or launch a login browser.

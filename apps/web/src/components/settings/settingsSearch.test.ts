@@ -120,6 +120,13 @@ describe("searchSettings", () => {
     },
   );
 
+  it.each(["openrouter", "OpenRouter API key"])("finds OpenRouter setup by %s", (query) => {
+    expect(searchSettings(query)[0]).toMatchObject({
+      id: "openrouter",
+      to: "/settings/providers",
+    });
+  });
+
   it("returns no results for an empty query", () => {
     expect(searchSettings("   ", ITEMS)).toEqual([]);
   });

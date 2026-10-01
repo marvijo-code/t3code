@@ -42,6 +42,7 @@ import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { resolveClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as OpenRouter from "../OpenRouter.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -98,6 +99,7 @@ export type ClaudeDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ModelManifest.ModelManifest
+  | OpenRouter.OpenRouter
   | Path.Path
   | ProviderEventLoggers
   | ServerConfig
@@ -143,9 +145,12 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           Effect.provideService(Path.Path, path),
         ),
       );
-      const continuationGroupKey = yield* makeClaudeContinuationGroupKey(
-        effectiveConfig,
-        processEnv,
+      const openRouter = OpenRouter.instanceSupport(yield* OpenRouter.OpenRouter, {
+        instanceId,
+        driverKind: DRIVER_KIND,
+      });
+      const continuationGroupKey = openRouter.continuationKey(
+        yield* makeClaudeContinuationGroupKey(effectiveConfig, processEnv),
       );
       const configDir = yield* resolveClaudeHomePath(effectiveConfig, processEnv);
       const accountConfigPath = yield* ClaudeResetCredits.claudeAccountConfigPath(
@@ -215,6 +220,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
                   ),
               ),
             ),
+            Effect.flatMap(openRouter.checked),
             Effect.map(stampIdentity),
           ),
         ),
@@ -234,6 +240,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
             Effect.flatMap((manifest) =>
               makePendingClaudeProvider(settings.provider, resolveClaudeModelCatalog(manifest)),
             ),
+            // Also on the pending snapshot: the registry retains Claude models missing from
+            // the next snapshot, so built-in models shown here would never leave this instance.
+            Effect.flatMap(openRouter.pending),
             Effect.map(stampIdentity),
           ),
         checkProvider,
@@ -343,7 +352,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        invalidateCaches: Cache.invalidateAll(capabilitiesProbeCache),
+        invalidateCaches: Cache.invalidateAll(capabilitiesProbeCache).pipe(
+          Effect.andThen(openRouter.invalidate),
+        ),
         snapshotForCwd,
         adapter,
         textGeneration,

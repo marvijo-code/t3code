@@ -133,6 +133,7 @@ import { OrchestrationEventStore } from "./persistence/Services/OrchestrationEve
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as OpenRouter from "./provider/OpenRouter.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
@@ -525,6 +526,7 @@ const buildAppUnderTest = (options?: {
     environmentTheme?: Partial<EnvironmentTheme.EnvironmentThemeService["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
     modelManifest?: Partial<ModelManifest.ModelManifest["Service"]>;
+    openRouter?: Partial<OpenRouter.OpenRouter["Service"]>;
     usageLimitSources?: Partial<UsageLimitSources.UsageLimitSources["Service"]>;
     providerService?: Partial<ProviderService.ProviderService["Service"]>;
     providerAuth?: Partial<ProviderAuthService["Service"]>;
@@ -806,6 +808,7 @@ const buildAppUnderTest = (options?: {
             forceRefresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
             ...options?.layers?.modelManifest,
           }),
+          Layer.mock(OpenRouter.OpenRouter)({ ...options?.layers?.openRouter }),
           Layer.mock(ProviderRegistry.ProviderRegistry)({
             getProviders: Effect.succeed([]),
             refresh: () => Effect.succeed([]),
