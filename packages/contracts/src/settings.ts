@@ -886,6 +886,15 @@ const SecretProviderConfigWrite = Schema.Struct({
 export const SourceControlHostSettings = Schema.Record(Schema.String, Schema.Unknown);
 export type SourceControlHostSettings = typeof SourceControlHostSettings.Type;
 
+/**
+ * OpenRouter setup for this environment. The key lives in the server's secret store; settings and
+ * clients only see a redaction marker when one is set. Clients change it through
+ * `server.configureOpenRouter`, which also keeps the OpenRouter provider instances in step.
+ */
+const OpenRouterSettings = Schema.Struct({
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -1356,6 +1365,7 @@ export const ServerSettings = Schema.Struct({
   sourceControlHosts: Schema.Record(Schema.String, SourceControlHostSettings).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  openRouter: OpenRouterSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // User-chosen ids preserve rows across edits; undecodable entries round-trip untouched.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1698,6 +1708,8 @@ export const ServerSettingsPatch = Schema.Struct({
   ),
   /** Merges per host, replacing patched fields whole; redaction markers retain secrets, empty or omitted secrets remove them. */
   sourceControlHosts: Schema.optionalKey(Schema.Record(Schema.String, SourceControlHostSettings)),
+  /** Written by the server's OpenRouter setup. Clients call `server.configureOpenRouter`. */
+  openRouter: Schema.optionalKey(Schema.Struct({ apiKey: Schema.optionalKey(TrimmedString) })),
   // Replace whole maps to avoid half-merged driver configs.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
   // Merge per source to avoid racing other edits; null removes an entry.

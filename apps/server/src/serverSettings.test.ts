@@ -2688,3 +2688,35 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer))(
     );
   },
 );
+
+describe("openRouter secrets", () => {
+  it.effect(
+    "keeps the OpenRouter key in the secret store and tells clients only that one is set",
+    () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+
+        const saved = yield* serverSettings.updateSettings({
+          openRouter: { apiKey: "sk-or-test" },
+        });
+        assert.equal(saved.openRouter.apiKey, "sk-or-test");
+        assert.notInclude(yield* fileSystem.readFileString(serverConfig.settingsPath), "sk-or-test");
+
+        const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).openRouter;
+        assert.notInclude(forClient.apiKey, "sk-or-test");
+        assert.isAbove(forClient.apiKey.length, 0);
+
+        // A client echoing the marker back, or an unrelated update, keeps the saved key.
+        yield* serverSettings.updateSettings({ openRouter: forClient });
+        yield* serverSettings.updateSettings({ defaultAutoPull: true });
+        assert.equal((yield* serverSettings.getSettings).openRouter.apiKey, "sk-or-test");
+
+        const cleared = yield* serverSettings.updateSettings({ openRouter: { apiKey: "" } });
+        assert.equal(cleared.openRouter.apiKey, "");
+        assert.isTrue(Option.isNone(yield* secrets.get("openrouter-api-key")));
+      }).pipe(Effect.provide(layerServerSettings())),
+  );
+});
