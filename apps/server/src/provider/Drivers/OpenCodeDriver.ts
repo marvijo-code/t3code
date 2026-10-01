@@ -36,6 +36,7 @@ import {
 } from "../Layers/OpenCodeProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import * as OpenRouter from "../OpenRouter.ts";
 import { OpenCodeRuntime, loadOpenCodeCommands } from "../opencodeRuntime.ts";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 import {
@@ -85,6 +86,7 @@ export type OpenCodeDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | OpenCodeRuntime
+  | OpenRouter.OpenRouter
   | Path.Path
   | ProviderEventLoggers
   | ServerConfig
@@ -109,6 +111,10 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       const processEnv = mergeProviderInstanceEnvironment(environment);
+      const openRouter = OpenRouter.instanceSupport(yield* OpenRouter.OpenRouter, {
+        instanceId,
+        driverKind: DRIVER_KIND,
+      });
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
         instanceId,
@@ -161,6 +167,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         { concurrency: "unbounded" },
       ).pipe(
         Effect.map(({ provider, usageLimits }) => ({ ...provider, usageLimits })),
+        Effect.flatMap(openRouter.checked),
         Effect.map(stampIdentity),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, pathService),
@@ -232,7 +239,10 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
           checkProviderOnSettingsChange: () => false,
           refreshOnInterval: false,
           initialSnapshot: (settings) =>
-            makePendingOpenCodeProvider(settings.provider).pipe(Effect.map(stampIdentity)),
+            makePendingOpenCodeProvider(settings.provider).pipe(
+              Effect.flatMap(openRouter.pending),
+              Effect.map(stampIdentity),
+            ),
           checkProvider,
           enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
             resolveMaintenance().pipe(
@@ -265,6 +275,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         accentColor,
         enabled,
         snapshot,
+        invalidateCaches: openRouter.invalidate,
         snapshotForCwd: (cwd) =>
           !effectiveConfig.enabled
             ? snapshot.getSnapshot

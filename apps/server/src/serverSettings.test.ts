@@ -1342,6 +1342,70 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
   );
 
+  it.effect(
+    "keeps the OpenRouter key in the secret store and tells clients only that one is set",
+    () =>
+      Effect.gen(function* () {
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+
+        const saved = yield* serverSettings.updateSettings({
+          openRouter: { apiKey: "sk-or-test" },
+        });
+        assert.equal(saved.openRouter.apiKey, "sk-or-test");
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        assert.notInclude(raw, "sk-or-test");
+
+        const forClient = ServerSettingsModule.redactServerSettingsForClient(saved).openRouter;
+        assert.notInclude(forClient.apiKey, "sk-or-test");
+        assert.isAbove(forClient.apiKey.length, 0);
+
+        // A client echoing the marker back, or an unrelated update, keeps the saved key.
+        yield* serverSettings.updateSettings({ openRouter: forClient });
+        yield* serverSettings.updateSettings({ defaultAutoPull: true });
+        assert.equal((yield* serverSettings.getSettings).openRouter.apiKey, "sk-or-test");
+
+        const cleared = yield* serverSettings.updateSettings({ openRouter: { apiKey: "" } });
+        assert.equal(cleared.openRouter.apiKey, "");
+        assert.isTrue(Option.isNone(yield* secrets.get("openrouter-api-key")));
+        assert.equal(
+          ServerSettingsModule.redactServerSettingsForClient(cleared).openRouter.apiKey,
+          "",
+        );
+      }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("keeps the managed OpenRouter instances in step with a key written by any patch", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const codexId = ProviderInstanceId.make("openrouter_codex");
+      const keyOf = (settings: ServerSettings) =>
+        settings.providerInstances[codexId]?.environment?.find(
+          (variable) => variable.name === "OPENROUTER_API_KEY",
+        )?.value;
+
+      yield* serverSettings.updateSettings({
+        openRouter: { apiKey: "sk-or-one" },
+        providerInstances: {
+          [codexId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+        },
+      });
+      assert.equal(keyOf(yield* serverSettings.getSettings), "sk-or-one");
+
+      yield* serverSettings.updateSettings({ openRouter: { apiKey: "sk-or-two" } });
+      const rotated = yield* serverSettings.getSettings;
+      assert.equal(keyOf(rotated), "sk-or-two");
+      assert.isTrue(rotated.providerInstances[codexId]?.enabled ?? false);
+
+      yield* serverSettings.updateSettings({ openRouter: { apiKey: "" } });
+      const cleared = yield* serverSettings.getSettings;
+      assert.isUndefined(keyOf(cleared));
+      assert.equal(cleared.providerInstances[codexId]?.enabled, false);
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
   it.effect("removes a Bitbucket secret once its token is cleared by hand in settings.json", () =>
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig.ServerConfig;
