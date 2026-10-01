@@ -172,6 +172,7 @@ function getOpenCodeTextResponse(parts: ReadonlyArray<unknown> | undefined): str
 
 export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration")(function* (
   openCodeSettings: OpenCodeSettings,
+  modelProvider?: "openrouter",
 ) {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const openCodeRuntime = yield* OpenCodeRuntime.OpenCodeRuntime;
@@ -185,7 +186,10 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
     readonly modelSelection: ModelSelection;
     readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
   }) {
-    const parsedModel = OpenCodeRuntime.parseOpenCodeModelSlug(input.modelSelection.model);
+    const parsedModel = OpenCodeRuntime.resolveOpenCodeModelSlug(
+      input.modelSelection.model,
+      modelProvider,
+    );
     if (!parsedModel) {
       return yield* new TextGenerationError({
         operation: input.operation,

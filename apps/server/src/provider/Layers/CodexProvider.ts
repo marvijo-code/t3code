@@ -63,7 +63,7 @@ type CodexRateLimitsProbe =
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
 
-const CODEX_PRESENTATION = {
+export const CODEX_PRESENTATION = {
   displayName: "Codex",
   showInteractionModeToggle: true,
   reportsContextWindow: true,

@@ -17,6 +17,7 @@ import * as Arr from "effect/Array";
 import * as Result from "effect/Result";
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 import {
+  OPENROUTER_HARNESSES,
   isProviderDriverKind,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
@@ -446,6 +447,9 @@ export function ProviderInstanceCard({
 }: ProviderInstanceCardProps) {
   const enabled = resolveProviderInstanceEnabled(instance);
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
+  const managed =
+    instance.integration === "openrouter" &&
+    OPENROUTER_HARNESSES.some((h) => h.instanceId === instanceId && h.driver === instance.driver);
   // A locally disabled provider reads "Disabled" with a muted dot even if its
   // last server status is stale. Enabled providers use the server status.
   const statusKey: ProviderStatusKey = enabled
@@ -726,7 +730,7 @@ export function ProviderInstanceCard({
         <span className="flex h-5 shrink-0 items-center">
           <Switch
             checked={enabled}
-            disabled={readOnly}
+            disabled={readOnly || managed}
             onCheckedChange={(checked) => updateEnabled(Boolean(checked))}
             aria-label={`Enable ${displayName}`}
           />
@@ -843,7 +847,7 @@ export function ProviderInstanceCard({
           </Popover>
         ) : null}
         {titleTailNode}
-        {onDelete ? (
+        {onDelete && !managed ? (
           <Button
             type="button"
             size="icon-xs"
@@ -859,7 +863,23 @@ export function ProviderInstanceCard({
     </div>
   );
 
-  const runtimeFields = driverOption ? (
+  const runtimeFields = managed ? (
+    <SettingsRow
+      title="Executable path"
+      description={<a href="#openrouter">Managed in OpenRouter settings</a>}
+      control={
+        <DraftInput
+          aria-label="Executable path"
+          value={
+            typeof (instance.config as { binaryPath?: unknown })?.binaryPath === "string"
+              ? (instance.config as { binaryPath: string }).binaryPath
+              : ""
+          }
+          onCommit={(binaryPath) => onUpdate({ ...instance, config: { binaryPath } })}
+        />
+      }
+    />
+  ) : driverOption ? (
     <ProviderSettingsForm
       definition={driverOption}
       value={instance.config}
@@ -895,31 +915,33 @@ export function ProviderInstanceCard({
             </ProviderStatusDiagnostic>
           }
           control={
-            <div
-              inert={readOnly}
-              aria-disabled={readOnly || undefined}
-              className={cn(
-                "flex w-full min-w-0 items-center justify-end gap-2 @min-[32rem]/settings-row:w-auto",
-                readOnly && "opacity-50 select-none",
-              )}
-            >
-              <ProviderAccentColorPicker
-                layout="inline"
-                displayName={displayName}
-                value={accentColor}
-                onCommit={updateAccentColor}
-                commitDelayMs={120}
-              />
-              <DraftInput
-                id={`provider-instance-${instanceId}-display-name`}
-                size="sm"
-                className="min-w-0 flex-1 @min-[32rem]/settings-row:w-56"
-                value={instance.displayName ?? ""}
-                onCommit={updateDisplayName}
-                placeholder={driverOption?.label ?? "Instance label"}
-                spellCheck={false}
-              />
-            </div>
+            !managed ? (
+              <div
+                inert={readOnly}
+                aria-disabled={readOnly || undefined}
+                className={cn(
+                  "flex w-full min-w-0 items-center justify-end gap-2 @min-[32rem]/settings-row:w-auto",
+                  readOnly && "opacity-50 select-none",
+                )}
+              >
+                <ProviderAccentColorPicker
+                  layout="inline"
+                  displayName={displayName}
+                  value={accentColor}
+                  onCommit={updateAccentColor}
+                  commitDelayMs={120}
+                />
+                <DraftInput
+                  id={`provider-instance-${instanceId}-display-name`}
+                  size="sm"
+                  className="min-w-0 flex-1 @min-[32rem]/settings-row:w-56"
+                  value={instance.displayName ?? ""}
+                  onCommit={updateDisplayName}
+                  placeholder={driverOption?.label ?? "Instance label"}
+                  spellCheck={false}
+                />
+              </div>
+            ) : undefined
           }
         />
       </SettingsSection>
@@ -952,19 +974,21 @@ export function ProviderInstanceCard({
         </SettingsSection>
       )}
 
-      <SettingsSection
-        title="Environment"
-        inert={readOnly}
-        aria-disabled={readOnly || undefined}
-        className={readOnly ? "opacity-50 select-none" : undefined}
-      >
-        <ProviderEnvironmentSection
-          environment={instance.environment ?? []}
-          onChange={updateEnvironment}
-        />
-      </SettingsSection>
+      {!managed ? (
+        <SettingsSection
+          title="Environment"
+          inert={readOnly}
+          aria-disabled={readOnly || undefined}
+          className={readOnly ? "opacity-50 select-none" : undefined}
+        >
+          <ProviderEnvironmentSection
+            environment={instance.environment ?? []}
+            onChange={updateEnvironment}
+          />
+        </SettingsSection>
+      ) : null}
 
-      {driverOption !== undefined ? (
+      {driverOption !== undefined && !managed ? (
         <SettingsSection
           title="Models"
           inert={readOnly}

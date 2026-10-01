@@ -89,3 +89,12 @@ it("requires operate permission for tool updates even alongside a read-only chec
   );
   expect(requiredScopeForDeviceList({ updateTool: "hub" })).toBe(AuthOrchestrationOperateScope);
 });
+
+it("OpenRouter testing and mutation require operate scope", () => {
+  expect(requiredScopeForRpcMethod(WS_METHODS.serverTestOpenRouterConnection)).toBe(
+    AuthOrchestrationOperateScope,
+  );
+  expect(requiredScopeForRpcMethod(WS_METHODS.serverUpdateSettings)).toBe(
+    AuthOrchestrationOperateScope,
+  );
+});

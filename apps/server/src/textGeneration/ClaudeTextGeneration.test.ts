@@ -130,6 +130,7 @@ function withFakeClaudeEnv<A, E, R>(
     configDirMustBe?: string;
     cwdMustNotBe?: string;
     claudeConfig?: Partial<ClaudeSettings>;
+    modelCatalog?: Parameters<typeof makeClaudeTextGeneration>[2];
   },
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
 ) {
@@ -253,13 +254,49 @@ function withFakeClaudeEnv<A, E, R>(
     const textGeneration = yield* makeClaudeTextGeneration(
       config,
       undefined,
-      Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
+      input.modelCatalog ?? Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
     );
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
 }
 
 it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
+  it.effect("OpenRouter Claude text generation bypasses native aliases and suffixes", () =>
+    withFakeClaudeEnv(
+      {
+        output: '{"structured_output":{"title":"Test title"}}',
+        argsMustContain: "--model vendor/raw/model",
+        argsMustNotContain: "[expanded]",
+        modelCatalog: Effect.succeed({
+          models: [
+            {
+              model: {
+                slug: "vendor/raw/model",
+                name: "Test",
+                isCustom: false,
+                capabilities: { optionDescriptors: [] },
+              },
+              runtime: {},
+              compatibility: {},
+            },
+          ],
+        }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const result = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Test",
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("openrouter_claude"),
+              "vendor/raw/model",
+            ),
+          });
+          expect(result.title).toBe("Test title");
+        }),
+    ),
+  );
+
   it.effect("forwards Claude thinking settings without passing unsupported effort", () =>
     withFakeClaudeEnv(
       {

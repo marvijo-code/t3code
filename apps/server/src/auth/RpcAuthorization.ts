@@ -1,5 +1,7 @@
+import * as Effect from "effect/Effect";
 import {
   type DeviceListInput,
+  EnvironmentAuthorizationError,
   AuthAccessReadScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -56,6 +58,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverRemoveKeybinding]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverGetSettings]: AuthOrchestrationReadScope,
   [WS_METHODS.serverUpdateSettings]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverTestOpenRouterConnection]: AuthOrchestrationOperateScope,
   [WS_METHODS.serverDiscoverSourceControl]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetTraceDiagnostics]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetProcessDiagnostics]: AuthOrchestrationReadScope,
@@ -192,3 +195,18 @@ export const requiredScopeForDeviceList = (input: DeviceListInput): AuthEnvironm
   input.retryHostId || input.updateTool
     ? AuthOrchestrationOperateScope
     : AuthOrchestrationReadScope;
+
+/** Reject before evaluating effects that require a scope the session does not carry. */
+export const authorizeEffectForScopes = <A, E, R>(
+  scopes: ReadonlyArray<AuthEnvironmentScope>,
+  requiredScope: AuthEnvironmentScope,
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | EnvironmentAuthorizationError, R> =>
+  scopes.includes(requiredScope)
+    ? effect
+    : Effect.fail(
+        new EnvironmentAuthorizationError({
+          message: `The authenticated token is missing required scope: ${requiredScope}.`,
+          requiredScope,
+        }),
+      );

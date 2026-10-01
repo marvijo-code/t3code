@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
+  OPENROUTER_HARNESSES,
   ModelSelection,
   ProjectId,
   ProjectScript,
@@ -13,6 +14,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Duration from "effect/Duration";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -1731,5 +1733,256 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       // The user's file is still there to repair; nothing was written over it.
       assert.equal(yield* fileSystem.readFileString(serverConfig.settingsPath), broken);
     }).pipe(Effect.provide(makeServerSettingsLayer())),
+  );
+});
+
+it.layer(NodeServices.layer)("OpenRouter secret persistence", (it) => {
+  for (const harness of OPENROUTER_HARNESSES) {
+    it.effect(
+      `OpenRouter rejects omitted occupied ${harness.instanceId} in a combined replacement patch`,
+      () =>
+        Effect.gen(function* () {
+          const service = yield* ServerSettingsModule.ServerSettingsService;
+          const fs = yield* FileSystem.FileSystem;
+          const config = yield* ServerConfig.ServerConfig;
+          const secrets = yield* ServerSecretStore.ServerSecretStore;
+          yield* service.updateSettings({
+            openRouter: { apiKey: "occupied-original-key" },
+            providerInstances: {
+              [harness.instanceId]: {
+                driver: ProviderDriverKind.make(harness.driver),
+                displayName: "Personal harness",
+                config: { binaryPath: "personal-harness" },
+              },
+            },
+          });
+          const original = yield* service.getSettings;
+          const disk = yield* fs.readFileString(config.settingsPath);
+          const secret = yield* secrets.get("openrouter-api-key");
+          const changes = yield* service.subscribeChanges;
+          const next = yield* changes.pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped);
+          const failed = yield* service
+            .updateSettings({
+              providerInstances: {},
+              openRouter: { [harness.setting]: true, apiKey: "occupied-replacement-key" },
+            })
+            .pipe(Effect.result);
+          assert.equal(failed._tag, "Failure");
+          assert.deepStrictEqual(yield* service.getSettings, original);
+          assert.strictEqual(yield* fs.readFileString(config.settingsPath), disk);
+          assert.deepStrictEqual(yield* secrets.get("openrouter-api-key"), secret);
+          // This acknowledged update is a barrier proving the failed patch emitted nothing.
+          yield* service.updateSettings({ openRouter: { apiKey: "barrier-key" } });
+          const emitted = yield* Fiber.join(next);
+          assert.equal(emitted[0]?.openRouter.apiKey, "barrier-key");
+          assert.isFalse(emitted[0]?.openRouter[harness.setting]);
+          assert.deepStrictEqual(emitted[0]?.providerInstances, original.providerInstances);
+        }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+    );
+  }
+  for (const failure of ["secret write", "response materialization"] as const) {
+    it.effect(`OpenRouter rolls back ${failure} failures without publishing success`, () => {
+      const sentinel = "distinctive-openrouter-failed-write-sentinel";
+      const secrets = new Map<string, Uint8Array>();
+      let rejectNewSecret = false;
+      const decoder = new TextDecoder();
+      const store = ServerSecretStore.ServerSecretStore.of({
+        get: (name) =>
+          Effect.suspend(() => {
+            const value = secrets.get(name);
+            return rejectNewSecret &&
+              failure === "response materialization" &&
+              value &&
+              decoder.decode(value) === sentinel
+              ? Effect.fail(
+                  new ServerSecretStore.SecretStoreReadError({ resource: name, cause: sentinel }),
+                )
+              : Effect.succeed(value ? Option.some(Uint8Array.from(value)) : Option.none());
+          }),
+        set: (name, value) =>
+          Effect.suspend(() => {
+            secrets.set(name, Uint8Array.from(value));
+            return rejectNewSecret &&
+              failure === "secret write" &&
+              decoder.decode(value) === sentinel
+              ? Effect.fail(
+                  new ServerSecretStore.SecretStorePersistError({
+                    resource: name,
+                    cause: sentinel,
+                  }),
+                )
+              : Effect.void;
+          }),
+        create: (name, value) =>
+          Effect.sync(() => {
+            secrets.set(name, Uint8Array.from(value));
+          }),
+        remove: (name) =>
+          Effect.sync(() => {
+            secrets.delete(name);
+          }),
+        getOrCreateRandom: () => Effect.die("Unexpected random secret"),
+      });
+      const settingsLayer = ServerSettingsModule.layer.pipe(
+        Layer.provide(Layer.succeed(ServerSecretStore.ServerSecretStore, store)),
+        Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
+        Layer.provideMerge(
+          Layer.fresh(
+            ServerConfig.layerTest(process.cwd(), { prefix: "t3-openrouter-secret-failure-" }),
+          ),
+        ),
+      );
+      return Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const fs = yield* FileSystem.FileSystem;
+        const config = yield* ServerConfig.ServerConfig;
+        yield* service.updateSettings({ openRouter: { apiKey: "original-key", codex: true } });
+        const original = yield* service.getSettings;
+        const disk = yield* fs.readFileString(config.settingsPath);
+        const changes = yield* service.subscribeChanges;
+        const nextChange = yield* changes.pipe(
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        rejectNewSecret = true;
+        const error = yield* Effect.flip(
+          service.updateSettings({
+            openRouter: { apiKey: sentinel, codex: false, openCode: true },
+          }),
+        );
+        assert.notInclude(JSON.stringify(error), sentinel);
+        assert.strictEqual(error.cause, undefined);
+        assert.strictEqual(decoder.decode(secrets.get("openrouter-api-key")), "original-key");
+        assert.deepStrictEqual(yield* service.getSettings, original);
+        assert.strictEqual(yield* fs.readFileString(config.settingsPath), disk);
+        rejectNewSecret = false;
+        // A successful write is a stream barrier: the failed write must emit nothing before it.
+        yield* service.updateSettings({ openRouter: { claudeCode: true } });
+        const emitted = yield* Fiber.join(nextChange);
+        assert.strictEqual(emitted.length, 1);
+        assert.isTrue(emitted[0]?.openRouter.codex);
+        assert.isTrue(emitted[0]?.openRouter.claudeCode);
+        assert.isFalse(emitted[0]?.openRouter.openCode);
+        assert.notInclude(
+          JSON.stringify(ServerSettingsModule.redactServerSettingsForClient(emitted[0]!)),
+          "original-key",
+        );
+      }).pipe(Effect.provide(settingsLayer));
+    });
+  }
+
+  it.effect(
+    "OpenRouter saves one secret, redacts wire settings, rotates and removes atomically",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const store = yield* ServerSecretStore.ServerSecretStore;
+        const key = "distinctive-openrouter-persistence-sentinel";
+        const saved = yield* service.updateSettings({
+          openRouter: { apiKey: key, codex: true, claudeCode: true, openCode: true },
+        });
+        assert.strictEqual(saved.openRouter.apiKey, key);
+        const secret = yield* store.get("openrouter-api-key");
+        assert.isTrue(Option.isSome(secret));
+        if (Option.isSome(secret)) assert.strictEqual(new TextDecoder().decode(secret.value), key);
+        const disk = yield* fs.readFileString(config.settingsPath);
+        assert.notInclude(disk, key);
+        assert.notInclude(disk, "OPENROUTER_API_KEY");
+        const names = yield* fs.readDirectory(config.secretsDir);
+        assert.strictEqual(names.length, 1);
+        const restarted = yield* Effect.gen(function* () {
+          const fresh = yield* ServerSettingsModule.ServerSettingsService;
+          return yield* fresh.getSettings;
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(ServerSettingsModule.layer).pipe(Layer.provide(ServerSecretStore.layer)),
+          ),
+        );
+        assert.strictEqual(restarted.openRouter.apiKey, key);
+        assert.deepStrictEqual(restarted.providerInstances, saved.providerInstances);
+        for (const state of [saved, yield* service.getSettings]) {
+          const wire = ServerSettingsModule.redactServerSettingsForClient(state);
+          assert.notInclude(JSON.stringify(wire), key);
+          assert.strictEqual(wire.openRouter.apiKey, "••••••");
+        }
+        yield* service.updateSettings({ openRouter: { apiKey: "••••••" }, providerInstances: {} });
+        assert.strictEqual((yield* service.getSettings).openRouter.apiKey, key);
+        assert.isTrue((yield* service.getSettings).providerInstances.openrouter_codex?.enabled);
+        yield* service.updateSettings({ openRouter: { apiKey: "replacement-sentinel" } });
+        assert.strictEqual((yield* service.getSettings).openRouter.apiKey, "replacement-sentinel");
+        yield* service.updateSettings({ openRouter: { apiKey: "" } });
+        const removed = yield* service.getSettings;
+        assert.deepStrictEqual(removed.openRouter, {
+          apiKey: "",
+          codex: false,
+          claudeCode: false,
+          openCode: false,
+        });
+        assert.isTrue(
+          Object.values(removed.providerInstances).every((entry) => entry.enabled === false),
+        );
+        assert.isTrue(Option.isNone(yield* store.get("openrouter-api-key")));
+        yield* service.updateSettings({ openRouter: { apiKey: "another-key" } });
+        assert.isFalse((yield* service.getSettings).openRouter.codex);
+      }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("OpenRouter migrates inline keys on startup", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        '{"openRouter":{"apiKey":"inline-test-sentinel","codex":true}}',
+      );
+      const loaded = yield* service.getSettings;
+      assert.strictEqual(loaded.openRouter.apiKey, "inline-test-sentinel");
+      assert.isTrue(loaded.providerInstances.openrouter_codex?.enabled);
+      assert.notInclude(yield* fs.readFileString(config.settingsPath), "inline-test-sentinel");
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("OpenRouter missing stored secret cannot enable inherited machine credentials", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        '{"openRouter":{"apiKey":"••••••","codex":true},"providerInstances":{"openrouter_codex":{"driver":"codex","integration":"openrouter","enabled":true,"config":{}}}}',
+      );
+      const loaded = yield* service.getSettings;
+      assert.strictEqual(loaded.openRouter.apiKey, "");
+      assert.isFalse(loaded.openRouter.codex);
+      assert.isFalse(loaded.providerInstances.openrouter_codex?.enabled);
+      const error = yield* Effect.flip(service.updateSettings({ openRouter: { codex: true } }));
+      assert.include(error.message, "Save an OpenRouter");
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("OpenRouter rolls back credentials and switches when settings persistence fails", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig.ServerConfig;
+      const fs = yield* FileSystem.FileSystem;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* service.updateSettings({ openRouter: { apiKey: "previous-sentinel", codex: true } });
+      const original = yield* service.getSettings;
+      yield* fs.remove(config.settingsPath);
+      yield* fs.makeDirectory(config.settingsPath);
+      const error = yield* Effect.flip(
+        service.updateSettings({ openRouter: { apiKey: "new-sentinel", codex: false } }),
+      );
+      assert.notInclude(JSON.stringify(error), "new-sentinel");
+      assert.deepStrictEqual(yield* service.getSettings, original);
+      const store = yield* ServerSecretStore.ServerSecretStore;
+      const value = yield* store.get("openrouter-api-key");
+      assert.isTrue(Option.isSome(value));
+      if (Option.isSome(value))
+        assert.strictEqual(new TextDecoder().decode(value.value), "previous-sentinel");
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
   );
 });

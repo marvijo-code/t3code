@@ -538,6 +538,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "snap-shot-enabled",
   },
   {
+    id: "openrouter",
+    title: "OpenRouter",
+    to: "/settings/providers",
+    scope: "environment",
+    providerSettingsOnly: true,
+    searchTerms: ["openrouter api key codex claude opencode models"],
+  },
+  {
     id: "providers",
     title: "Providers",
     to: "/settings/providers",

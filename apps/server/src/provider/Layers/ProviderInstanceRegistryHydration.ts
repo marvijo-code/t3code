@@ -1,3 +1,6 @@
+import { materializeOpenRouterInstances } from "../OpenRouterSettings.ts";
+import { OpenRouterCatalog } from "../OpenRouterCatalog.ts";
+import type { ServerProviderModel } from "@t3tools/contracts";
 /**
  * ProviderInstanceRegistryHydration — derive a `ProviderInstanceConfigMap`
  * from `ServerSettings` and keep `ProviderInstanceRegistry` in sync with it.
@@ -54,7 +57,10 @@ import * as Stream from "effect/Stream";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
-import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
+import {
+  ProviderInstanceRegistryMutator,
+  type ProviderInstanceRegistryMutatorShape,
+} from "../Services/ProviderInstanceRegistryMutator.ts";
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
 
 /**
@@ -72,8 +78,11 @@ import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistry
  */
 export const deriveProviderInstanceConfigMap = (
   settings: ServerSettings,
+  models: ReadonlyArray<ServerProviderModel> = [],
 ): ProviderInstanceConfigMap => {
-  const merged: Record<string, ProviderInstanceConfig> = { ...settings.providerInstances };
+  const merged: Record<string, ProviderInstanceConfig> = {
+    ...materializeOpenRouterInstances(settings, models),
+  };
 
   for (const driver of BUILT_IN_DRIVERS) {
     const instanceId = defaultInstanceIdForDriver(driver.driverKind);
@@ -114,26 +123,6 @@ export const deriveProviderInstanceConfigMap = (
  * configs, so the only way the watcher could fail is a settings stream
  * tear-down, which logs and exits cleanly.
  */
-const SettingsWatcherLive = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const mutator = yield* ProviderInstanceRegistryMutator;
-    const serverSettings = yield* ServerSettingsService;
-    const settingsChanges = yield* serverSettings.subscribeChanges;
-    yield* settingsChanges.pipe(
-      Stream.runForEach((next) =>
-        mutator
-          .reconcile(deriveProviderInstanceConfigMap(next))
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
-            ),
-          ),
-      ),
-      Effect.forkScoped,
-    );
-  }),
-);
-
 /**
  * Hydrate `ProviderInstanceRegistry` from `ServerSettings` and keep it in
  * sync with subsequent `streamChanges` emissions.
@@ -150,26 +139,56 @@ const SettingsWatcherLive = Layer.effectDiscard(
  * The mutator tag is technically also exposed; only this module imports
  * it, so the visibility leak is harmless in practice.
  */
+/** Acquire both streams before reading the initial state so updates cannot fall into a startup gap. */
+export const prepareProviderInstanceHydration = Effect.fnUntraced(function* () {
+  const serverSettings = yield* ServerSettingsService;
+  const catalog = yield* OpenRouterCatalog;
+  const settingsChanges = yield* serverSettings.subscribeChanges;
+  const catalogChanges = yield* catalog.subscribeChanges;
+  const initialSettings = yield* serverSettings.getSettings.pipe(
+    Effect.orElseSucceed(() => undefined),
+  );
+  const models = yield* initialSettings &&
+  Object.values(initialSettings.openRouter).some((value) => value === true)
+    ? catalog.refresh
+    : catalog.current;
+  return {
+    initialConfigMap: initialSettings
+      ? deriveProviderInstanceConfigMap(initialSettings, models)
+      : {},
+    watch: (mutator: ProviderInstanceRegistryMutatorShape) =>
+      Stream.merge(settingsChanges, catalogChanges).pipe(
+        Stream.runForEach(() =>
+          Effect.gen(function* () {
+            const latest = yield* serverSettings.getSettings;
+            const currentModels = yield* catalog.current;
+            yield* mutator.reconcile(deriveProviderInstanceConfigMap(latest, currentModels));
+          }).pipe(
+            Effect.catchCause(() => Effect.logError("Provider instance reconciliation failed.")),
+          ),
+        ),
+        Effect.forkScoped,
+      ),
+  };
+});
+
 export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
   ProviderInstanceRegistry,
   never,
   BuiltInDriversEnv | ServerSettingsService
 > = Layer.unwrap(
   Effect.gen(function* () {
-    const serverSettings = yield* ServerSettingsService;
-    const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
-      Effect.orElseSucceed(() => undefined),
-    );
-    const initialConfigMap =
-      initialSettings === undefined
-        ? ({} as ProviderInstanceConfigMap)
-        : deriveProviderInstanceConfigMap(initialSettings);
-
+    const hydration = yield* prepareProviderInstanceHydration();
     const mutableLayer = ProviderInstanceRegistryMutableLayer({
       drivers: BUILT_IN_DRIVERS,
-      configMap: initialConfigMap,
+      configMap: hydration.initialConfigMap,
     });
-
-    return SettingsWatcherLive.pipe(Layer.provideMerge(mutableLayer));
+    const watcher = Layer.effectDiscard(
+      Effect.gen(function* () {
+        const mutator = yield* ProviderInstanceRegistryMutator;
+        yield* hydration.watch(mutator);
+      }),
+    );
+    return watcher.pipe(Layer.provideMerge(mutableLayer));
   }),
 ) as Layer.Layer<ProviderInstanceRegistry, never, BuiltInDriversEnv | ServerSettingsService>;

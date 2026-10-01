@@ -1,3 +1,7 @@
+import {
+  runtimeEntry,
+  modelSlug as openRouterModelSlug,
+} from "../Drivers/OpenRouterDriver.testFixtures.ts";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -8014,3 +8018,71 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 });
+
+it.effect(
+  "OpenRouter OpenCode adapter preserves raw slugs across prompts, commands and compaction",
+  () => {
+    const entry = runtimeEntry("opencode", "fake-opencode");
+    const adapterLayer = Layer.effect(
+      OpenCodeAdapter,
+      makeOpenCodeAdapter(
+        { ...openCodeAdapterTestSettings, serverUrl: "" },
+        {
+          instanceId: entry.instanceId,
+          environment: Object.fromEntries((entry.environment ?? []).map((v) => [v.name, v.value])),
+          modelProvider: "openrouter",
+        },
+      ),
+    ).pipe(
+      Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-openrouter-opencode-adapter-" }),
+      ),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("openrouter-opencode-test");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      if (adapter.compaction?.type === "native") {
+        yield* adapter.compaction.start(
+          threadId,
+          createModelSelection(entry.instanceId, "openrouter/auto"),
+        );
+        NodeAssert.deepEqual(runtimeMock.state.summarizeCalls[0], {
+          sessionID: "/session",
+          providerID: "openrouter",
+          modelID: "openrouter/auto",
+          auto: false,
+        });
+      } else throw new Error("Expected native compaction");
+      yield* adapter.sendTurn({
+        threadId,
+        input: "Test",
+        modelSelection: createModelSelection(entry.instanceId, openRouterModelSlug),
+      });
+      NodeAssert.deepEqual((runtimeMock.state.promptCalls[0] as { model: unknown }).model, {
+        providerID: "openrouter",
+        modelID: openRouterModelSlug,
+      });
+      NodeAssert.equal((yield* adapter.listSessions())[0]?.model, openRouterModelSlug);
+      const cursor = (yield* adapter.listSessions())[0]?.resumeCursor;
+      yield* adapter.stopSession(threadId);
+      yield* adapter.startSession({
+        threadId,
+        runtimeMode: "full-access",
+        resumeCursor: cursor,
+        modelSelection: createModelSelection(entry.instanceId, openRouterModelSlug),
+      });
+      yield* adapter.sendTurn({
+        threadId,
+        input: "/review",
+        modelSelection: createModelSelection(entry.instanceId, "openrouter/auto"),
+      });
+      NodeAssert.equal(runtimeMock.state.commandCalls[0]?.model, "openrouter/openrouter/auto");
+      yield* adapter.stopSession(threadId);
+    }).pipe(Effect.provide(adapterLayer));
+  },
+);

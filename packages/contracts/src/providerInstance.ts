@@ -123,6 +123,7 @@ export type ProviderInstanceEnvironment = typeof ProviderInstanceEnvironment.Typ
  */
 export const ProviderInstanceConfig = Schema.Struct({
   driver: ProviderDriverKind,
+  integration: Schema.optionalKey(Schema.Literal("openrouter")),
   displayName: Schema.optional(TrimmedNonEmptyString),
   accentColor: Schema.optional(TrimmedNonEmptyString),
   environment: Schema.optionalKey(ProviderInstanceEnvironment),

@@ -1,3 +1,6 @@
+import { loadCodexWorkspaceSkills } from "./workspaceInventory.ts";
+import { makeOpenRouterProvider } from "../OpenRouterProvider.ts";
+import { OpenRouterCatalog } from "../OpenRouterCatalog.ts";
 /**
  * CodexDriver — first concrete `ProviderDriver` in the new per-instance model.
  *
@@ -41,7 +44,6 @@ import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import {
   checkCodexProviderStatus,
   makePendingCodexProvider,
-  probeCodexSkillsForCwd,
   withCodexAppServerClient,
 } from "../Layers/CodexProvider.ts";
 import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
@@ -105,6 +107,7 @@ function makeCodexMaintenanceResolver(sharedHomePath: string) {
  * registered driver and the runtime satisfies them once.
  */
 export type CodexDriverEnv =
+  | OpenRouterCatalog
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | ResetCreditCoordinator.ResetCreditCoordinator
@@ -128,8 +131,18 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   },
   configSchema: CodexSettings,
   defaultConfig: (): CodexSettings => decodeCodexSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({ instanceId, displayName, accentColor, environment, enabled, config, integration }) =>
     Effect.gen(function* () {
+      if (integration === "openrouter" && instanceId === "openrouter_codex")
+        return yield* makeOpenRouterProvider(DRIVER_KIND, {
+          instanceId,
+          displayName,
+          accentColor,
+          environment,
+          enabled,
+          config,
+          integration,
+        });
       if (config.setupMode === "managed")
         return yield* makeManagedCodexProvider({
           instanceId,
@@ -261,15 +274,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           ? snapshot.getSnapshot
           : Effect.all([
               snapshot.getSnapshot,
-              probeCodexSkillsForCwd({
-                binaryPath: effectiveConfig.binaryPath,
-                homePath: effectiveConfig.homePath,
-                launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
-                cwd,
-                environment: processEnv,
-              }).pipe(
-                Effect.scoped,
-                Effect.timeout("20 seconds"),
+              loadCodexWorkspaceSkills(effectiveConfig, cwd, processEnv).pipe(
                 Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
               ),
             ]).pipe(

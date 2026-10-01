@@ -904,6 +904,14 @@ export const UsageLimitSourceConfig = Schema.Struct({
 });
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
 
+export const OpenRouterSettings = Schema.Struct({
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  codex: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  claudeCode: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  openCode: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+});
+export type OpenRouterSettings = typeof OpenRouterSettings.Type;
+
 /**
  * Bitbucket API credentials for this environment, used before the
  * `T3CODE_BITBUCKET_*` environment variables. The tokens live in the server's
@@ -1293,6 +1301,7 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  openRouter: OpenRouterSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   bitbucket: BitbucketSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
@@ -1374,6 +1383,7 @@ export type ServerSettingsOperation = typeof ServerSettingsOperation.Type;
 export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>()(
   "ServerSettingsError",
   {
+    detail: Schema.optionalKey(Schema.String),
     settingsPath: Schema.String,
     operation: ServerSettingsOperation,
     providerInstanceId: Schema.optional(Schema.String),
@@ -1382,6 +1392,7 @@ export class ServerSettingsError extends Schema.TaggedError<ServerSettingsError>
   },
 ) {
   override get message(): string {
+    if (this.detail) return this.detail;
     const provider =
       this.providerInstanceId === undefined ? "" : ` for provider ${this.providerInstanceId}`;
     const variable =
@@ -1556,6 +1567,14 @@ export const ServerSettingsPatch = Schema.Struct({
     }),
   ),
   /** An empty token clears it; an omitted one keeps what the server has. */
+  openRouter: Schema.optionalKey(
+    Schema.Struct({
+      apiKey: Schema.optionalKey(TrimmedString),
+      codex: Schema.optionalKey(Schema.Boolean),
+      claudeCode: Schema.optionalKey(Schema.Boolean),
+      openCode: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
   bitbucket: Schema.optionalKey(
     Schema.Struct({
       email: Schema.optionalKey(TrimmedString),

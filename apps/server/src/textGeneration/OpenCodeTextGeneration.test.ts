@@ -1,3 +1,4 @@
+import { createModelSelection } from "@t3tools/shared/model";
 import { OpenCodeSettings, ProviderInstanceId, TextGenerationError } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -20,6 +21,7 @@ const runtimeMock = {
     startCalls: [] as string[],
     promptUrls: [] as string[],
     promptParts: [] as ReadonlyArray<unknown>[],
+    promptModels: [] as unknown[],
     authHeaders: [] as Array<string | null>,
     closeCalls: [] as string[],
     sessionCreateCalls: 0,
@@ -35,6 +37,7 @@ const runtimeMock = {
     this.state.startCalls.length = 0;
     this.state.promptUrls.length = 0;
     this.state.promptParts.length = 0;
+    this.state.promptModels.length = 0;
     this.state.authHeaders.length = 0;
     this.state.closeCalls.length = 0;
     this.state.sessionCreateCalls = 0;
@@ -101,9 +104,13 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntime.OpenCodeRuntimeShape = {
           }
           return runtimeMock.state.sessionResult ?? { data: { id: `${baseUrl}/session` } };
         },
-        prompt: async (input: { readonly parts: ReadonlyArray<unknown> }) => {
+        prompt: async (input: {
+          readonly parts: ReadonlyArray<unknown>;
+          readonly model?: unknown;
+        }) => {
           runtimeMock.state.promptUrls.push(baseUrl);
           runtimeMock.state.promptParts.push(input.parts);
+          runtimeMock.state.promptModels.push(input.model);
           runtimeMock.state.authHeaders.push(
             serverPassword ? `Basic ${btoa(`opencode:${serverPassword}`)}` : null,
           );
@@ -209,6 +216,7 @@ function withOpenCodeTextGeneration<A, E, R>(
   settings: OpenCodeSettings,
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
   environment?: NodeJS.ProcessEnv,
+  modelProvider?: "openrouter",
 ) {
   return Effect.gen(function* () {
     const serverOwner = yield* OpenCodeServerOwner.make({
@@ -217,9 +225,10 @@ function withOpenCodeTextGeneration<A, E, R>(
       ...(settings.serverPassword ? { serverPassword: settings.serverPassword } : {}),
       ...(environment ? { environment } : {}),
     });
-    const textGeneration = yield* OpenCodeTextGeneration.makeOpenCodeTextGeneration(settings).pipe(
-      Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
-    );
+    const textGeneration = yield* OpenCodeTextGeneration.makeOpenCodeTextGeneration(
+      settings,
+      modelProvider,
+    ).pipe(Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner));
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
 }
@@ -235,6 +244,32 @@ const advanceIdleClock = Effect.gen(function* () {
 });
 
 it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGeneration", (it) => {
+  it.effect("OpenRouter text generation uses the complete raw model ID including auto", () =>
+    withOpenCodeTextGeneration(
+      DEFAULT_OPENCODE_SETTINGS,
+      (textGeneration) =>
+        Effect.gen(function* () {
+          runtimeMock.state.promptResult = {
+            data: { parts: [{ type: "text", text: '{"title":"Test title"}' }] },
+          };
+          const result = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Test",
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("openrouter_opencode"),
+              "openrouter/auto",
+            ),
+          });
+          expect(result.title).toBe("Test title");
+          expect(runtimeMock.state.promptModels).toEqual([
+            { providerID: "openrouter", modelID: "openrouter/auto" },
+          ]);
+        }),
+      { OPENROUTER_API_KEY: "test-key" },
+      "openrouter",
+    ),
+  );
+
   it.effect("excludes generic files from thread title generation", () =>
     withOpenCodeTextGeneration(DEFAULT_OPENCODE_SETTINGS, (textGeneration) =>
       Effect.gen(function* () {

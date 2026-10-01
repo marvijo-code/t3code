@@ -914,3 +914,22 @@ describe("resolvePlanAgentHealPatch", () => {
     ).toEqual({ sourceControlWriterModelSelection: healed });
   });
 });
+
+describe("OpenRouter selection defaults", () => {
+  it("does not invent a native model for an empty custom catalog", () => {
+    const snapshots = [provider({ instanceId: "openrouter_codex", models: [] })];
+    expect(resolveAppModelSelectionState(DEFAULT_UNIFIED_SETTINGS, snapshots)).toEqual(
+      createModelSelection(snapshots[0]!.instanceId, "", []),
+    );
+  });
+  it("preserves a stale raw slug as an unavailable selection", () => {
+    const snapshots = [provider({ instanceId: "openrouter_codex", models: ["vendor/new"] })];
+    const selection = createModelSelection(snapshots[0]!.instanceId, "vendor/old");
+    expect(
+      resolveAppModelSelectionState(
+        { ...DEFAULT_UNIFIED_SETTINGS, textGenerationModelSelection: selection },
+        snapshots,
+      ),
+    ).toEqual(selection);
+  });
+});

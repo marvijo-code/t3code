@@ -53,6 +53,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     import("@t3tools/contracts").ProviderSetupError,
     Scope.Scope
   >,
+  backend?: "openrouter",
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -197,16 +198,24 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const models = yield* getModels;
       const requestedModel = modelSelection.model;
       const model =
-        models.find((candidate) => candidate.slug === requestedModel)?.slug ??
-        models.find(
-          (candidate) => !candidate.isCustom && codexModelFamily(candidate.slug) === requestedModel,
-        )?.slug ??
-        requestedModel;
+        backend === "openrouter"
+          ? requestedModel
+          : (models.find((candidate) => candidate.slug === requestedModel)?.slug ??
+            models.find(
+              (candidate) =>
+                !candidate.isCustom && codexModelFamily(candidate.slug) === requestedModel,
+            )?.slug ??
+            requestedModel);
       const launchArgs = resolveCodexLaunchArgs(effectiveConfig.launchArgs, effectiveEnvironment);
       const reasoningEffort =
-        getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
-        DEFAULT_TEXT_GENERATION_REASONING_EFFORT;
-      const serviceTier = resolved ? undefined : getCodexServiceTierOptionValue(modelSelection);
+        backend === "openrouter"
+          ? undefined
+          : (getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ??
+            DEFAULT_TEXT_GENERATION_REASONING_EFFORT);
+      const serviceTier =
+        resolved || backend === "openrouter"
+          ? undefined
+          : getCodexServiceTierOptionValue(modelSelection);
       const spawnCommand = yield* resolveSpawnCommand(
         effectiveConfig.binaryPath || "codex",
         [
@@ -218,8 +227,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           "read-only",
           "--model",
           model,
-          "--config",
-          `model_reasoning_effort="${reasoningEffort}"`,
+          ...(reasoningEffort ? ["--config", `model_reasoning_effort="${reasoningEffort}"`] : []),
           ...(serviceTier ? ["--config", `service_tier="${serviceTier}"`] : []),
           "--output-schema",
           schemaPath,

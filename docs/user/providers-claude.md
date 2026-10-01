@@ -74,30 +74,16 @@ tool, which refuses skills reserved for manual invocation.
 
 ## OpenRouter
 
-Create a Claude instance with its own config directory, such as
-`~/.claude_openrouter`, and keep **Binary path** set to `claude`. In that instance's
-**Environment variables**, use:
+In **Settings > Providers > OpenRouter**, save your OpenRouter API key on the execution
+environment, test the connection, and enable **Use OpenRouter for Claude Code**. Select
+**OpenRouter (Claude Code)** and an OpenRouter model when starting a thread. The environment
+still needs the `claude` executable installed. Model compatibility depends on Claude Code
+and OpenRouter; a successful key test does not guarantee every model works.
 
-| Variable               | Value                                     |
-| ---------------------- | ----------------------------------------- |
-| `ANTHROPIC_BASE_URL`   | `https://openrouter.ai/api`               |
-| `ANTHROPIC_AUTH_TOKEN` | Your OpenRouter API key, marked Sensitive |
-| `ANTHROPIC_API_KEY`    | An explicitly empty value                 |
-
-If that Claude config directory has a cached Anthropic login, run `/logout` in a
-Claude Code session using that directory before starting the router setup. Cached
-login credentials can conflict with the router token.
-
-Select the model you want in T3 Code. For an OpenRouter model outside the built-in
-list, open that Claude instance in **Settings > Providers** and add its full model
-ID with **Add custom model**. Then select it in the chat model picker.
-`ANTHROPIC_DEFAULT_*_MODEL` variables map Claude Code aliases such as `sonnet`; they
-do not replace the explicit model ID selected in T3 Code. Custom models may have
-fewer effort, thinking, or context controls than built-in models.
-
-Verify the model used in OpenRouter's activity dashboard. For current compatibility
-requirements, use the
-[OpenRouter Claude Code guide](https://openrouter.ai/docs/cookbook/coding-agents/claude-code-integration).
+Setup is per connected environment. The key stays on that server and is shared by the
+three OpenRouter harness switches. Removing the key turns all switches off. Key and switch
+changes reconnect the affected harness; thread history is retained. Separate custom
+instances with their own environment variables remain available for advanced setups.
 
 ## Other routers
 

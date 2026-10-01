@@ -99,6 +99,7 @@ vi.mock("../../state/session", () => ({
   useEnvironmentSessionState: () => ({ data: null, hasError: false, isPending: true }),
 }));
 
+import { OpenRouterSettings } from "./OpenRouterSettings";
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
 const environmentId = EnvironmentId.make("remote-device");
@@ -389,4 +390,13 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(resetPatch).not.toHaveProperty("favorites");
     expect(resetPatch).not.toHaveProperty("providerModelPreferences");
   });
+});
+
+it("OpenRouter is available in a remote environment without ready providers", () => {
+  atoms.providers = [];
+  settingsState.value = { ...DEFAULT_UNIFIED_SETTINGS };
+  hooks.beginRender();
+  const tree = EnvironmentProviderSettings({ environmentId, readOnly: false });
+  const section = visitElements(tree, (e) => e.type === OpenRouterSettings);
+  expect(section?.props.environmentId).toBe(environmentId);
 });

@@ -1,3 +1,4 @@
+import { OpenRouterSettings } from "./OpenRouterSettings";
 import { SettingsGroup } from "./SettingsGroup";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
@@ -1060,6 +1061,7 @@ export function EnvironmentProviderSettings({
 
   return (
     <>
+      <OpenRouterSettings key={environmentId} environmentId={environmentId} readOnly={readOnly} />
       <SettingsSection
         {...searchableSetting("providers")}
         variant="plain"

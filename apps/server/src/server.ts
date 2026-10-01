@@ -1,3 +1,4 @@
+import * as OpenRouterCatalog from "./provider/OpenRouterCatalog.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeHttp from "node:http";
 
@@ -548,7 +549,12 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // from the repo's `model-manifest.json` on `main` and applied by the
   // Codex/Claude drivers.
   Layer.provideMerge(
-    Layer.mergeAll(ProviderEventLoggers.layer, ModelManifest.layer, ResetCreditCoordinator.layer),
+    Layer.mergeAll(
+      ProviderEventLoggers.layer,
+      ModelManifest.layer,
+      OpenRouterCatalog.layer,
+      ResetCreditCoordinator.layer,
+    ),
   ),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but

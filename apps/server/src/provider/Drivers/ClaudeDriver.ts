@@ -1,3 +1,5 @@
+import { makeOpenRouterProvider } from "../OpenRouterProvider.ts";
+import { OpenRouterCatalog } from "../OpenRouterCatalog.ts";
 /**
  * ClaudeDriver — `ProviderDriver` for the Claude Agent SDK runtime.
  *
@@ -91,6 +93,7 @@ const UPDATE = makePackageManagedProviderMaintenanceResolver({
 });
 
 export type ClaudeDriverEnv =
+  | OpenRouterCatalog
   | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | ResetCreditCoordinator.ResetCreditCoordinator
@@ -111,8 +114,18 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
   },
   configSchema: ClaudeSettings,
   defaultConfig: (): ClaudeSettings => decodeClaudeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({ instanceId, displayName, accentColor, environment, enabled, config, integration }) =>
     Effect.gen(function* () {
+      if (integration === "openrouter" && instanceId === "openrouter_claude")
+        return yield* makeOpenRouterProvider(DRIVER_KIND, {
+          instanceId,
+          displayName,
+          accentColor,
+          environment,
+          enabled,
+          config,
+          integration,
+        });
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;

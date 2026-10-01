@@ -136,6 +136,7 @@ function withFakeCodexEnv<A, E, R>(
     environment?: NodeJS.ProcessEnv;
     models?: ReadonlyArray<string>;
     managedRuntime?: boolean;
+    backend?: "openrouter";
   },
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
 ) {
@@ -162,12 +163,39 @@ function withFakeCodexEnv<A, E, R>(
             revision: "test",
           })
         : undefined,
+      input.backend,
     );
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
 }
 
 it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
+  it.effect(
+    "OpenRouter text generation keeps the raw slug and omits native reasoning defaults",
+    () =>
+      withFakeCodexEnv(
+        {
+          output: '{"title":"Test title"}',
+          backend: "openrouter",
+          models: ["vendor/raw"],
+          requireArg: "--model vendor/raw",
+          forbidReasoningEffort: true,
+        },
+        (textGeneration) =>
+          Effect.gen(function* () {
+            const result = yield* textGeneration.generateThreadTitle({
+              cwd: process.cwd(),
+              message: "Test",
+              modelSelection: createModelSelection(
+                ProviderInstanceId.make("openrouter_codex"),
+                "vendor/raw",
+              ),
+            });
+            expect(result.title).toBe("Test title");
+          }),
+      ),
+  );
+
   for (const selectedModel of ["gpt-5.6-luna", "openai.gpt-5.6-luna"]) {
     it.effect(`dispatches the qualified live model for ${selectedModel}`, () =>
       withFakeCodexEnv(

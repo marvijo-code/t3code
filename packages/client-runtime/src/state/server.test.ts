@@ -1,3 +1,6 @@
+import * as Layer from "effect/Layer";
+import { Atom, AtomRegistry } from "effect/unstable/reactivity";
+import * as EnvironmentRegistry from "../connection/registry.ts";
 import {
   EnvironmentId,
   type ServerConfig,
@@ -31,6 +34,7 @@ import * as Persistence from "../platform/persistence.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import {
+  createServerEnvironmentAtoms,
   applyServerWelcomeEvent,
   makeEnvironmentServerWelcomeState,
   makeEnvironmentServerConfigState,
@@ -864,3 +868,62 @@ describe("server state projection", () => {
     }),
   );
 });
+
+it.effect("OpenRouter connection command routes through the requested environment", () =>
+  Effect.gen(function* () {
+    const calls: string[] = [];
+    const environments = EnvironmentRegistry.EnvironmentRegistry.of({
+      run: (environmentId, effect) =>
+        Effect.gen(function* () {
+          const client = {
+            [WS_METHODS.serverTestOpenRouterConnection]: () =>
+              Effect.sync(() => {
+                calls.push(environmentId);
+                return { success: true as const, limitRemaining: null };
+              }),
+          } as unknown as WsRpcProtocolClient;
+          const target = new PrimaryConnectionTarget({
+            environmentId,
+            label: "Test",
+            httpBaseUrl: "https://example.test",
+            wsBaseUrl: "wss://example.test",
+          });
+          const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+            target,
+            state: yield* SubscriptionRef.make({
+              ...AVAILABLE_CONNECTION_STATE,
+              phase: "connected" as const,
+            }),
+            session: yield* SubscriptionRef.make(Option.some(session(client))),
+            prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+            connect: Effect.void,
+            disconnect: Effect.void,
+            retryNow: Effect.void,
+          });
+          return yield* Effect.provideService(
+            effect,
+            EnvironmentSupervisor.EnvironmentSupervisor,
+            supervisor,
+          );
+        }),
+    } as EnvironmentRegistry.EnvironmentRegistry["Service"]);
+    const runtime = Atom.runtime(
+      Layer.merge(
+        Layer.succeed(EnvironmentRegistry.EnvironmentRegistry, environments),
+        Layer.mock(Persistence.EnvironmentCacheStore)({}),
+      ),
+    );
+    const atoms = createServerEnvironmentAtoms(runtime, {
+      initialConfigValueAtom: () => Atom.make(CONFIG),
+    });
+    const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (value) =>
+      Effect.sync(() => value.dispose()),
+    );
+    const remote = EnvironmentId.make("remote-openrouter");
+    const result = yield* Effect.promise(() =>
+      atoms.testOpenRouterConnection.run(registry, { environmentId: remote, input: {} }),
+    );
+    expect(result._tag).toBe("Success");
+    expect(calls).toEqual([remote]);
+  }),
+);

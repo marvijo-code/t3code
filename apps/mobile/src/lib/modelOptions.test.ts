@@ -409,3 +409,34 @@ describe("mobile model options", () => {
     ).toBeNull();
   });
 });
+
+it("OpenRouter mobile snapshots retain instance identity and complete raw model slugs", () => {
+  const config = {
+    providers: ["codex", "claudeAgent", "opencode"].map((driver, i) => ({
+      instanceId: ["openrouter_codex", "openrouter_claude", "openrouter_opencode"][i],
+      driver,
+      enabled: true,
+      installed: true,
+      auth: { status: "authenticated" },
+      models: [
+        {
+          slug: "vendor/raw/model",
+          name: "Test",
+          isCustom: false,
+          capabilities: { optionDescriptors: [] },
+        },
+      ],
+    })),
+  } as unknown as ServerConfig;
+  expect(buildModelOptions(config, null).map((option) => option.selection)).toEqual([
+    { instanceId: "openrouter_codex", model: "vendor/raw/model" },
+    { instanceId: "openrouter_claude", model: "vendor/raw/model" },
+    { instanceId: "openrouter_opencode", model: "vendor/raw/model" },
+  ]);
+  expect(
+    buildModelOptions(
+      { ...config, providers: config.providers.map((p) => ({ ...p, models: [] })) },
+      null,
+    ),
+  ).toEqual([]);
+});

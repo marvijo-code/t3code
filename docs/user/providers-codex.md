@@ -105,3 +105,13 @@ In an existing Codex thread, send `/feedback` with an optional description, for
 example `/feedback The agent stopped before finishing the tests`. This uploads
 the conversation and Codex logs to OpenAI. The returned thread ID can be shared
 with OpenAI support.
+
+## OpenRouter
+
+In **Settings > Providers > OpenRouter**, save your OpenRouter API key on the execution
+environment, test the connection, and enable **Use OpenRouter for Codex**. Select
+**OpenRouter (Codex)** and an OpenRouter model when starting a thread. The environment
+still needs the `codex` executable installed. Setup is per connected environment;
+the key stays on that server. Key and switch changes reconnect the affected harness,
+while retaining thread history. Removing the key turns all OpenRouter switches off.
+Separate custom instances remain available for advanced setups.

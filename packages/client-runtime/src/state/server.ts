@@ -1126,6 +1126,12 @@ export function createServerEnvironmentAtoms<R, E>(
       scheduler: configScheduler,
       concurrency: configConcurrency,
     }),
+    testOpenRouterConnection: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:test-openrouter-connection",
+      tag: WS_METHODS.serverTestOpenRouterConnection,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
     updateSettings: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:update-settings",
       tag: WS_METHODS.serverUpdateSettings,

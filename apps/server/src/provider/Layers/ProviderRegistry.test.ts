@@ -1,3 +1,4 @@
+import * as OpenRouterCatalog from "../OpenRouterCatalog.ts";
 import { CodexInstallation } from "../CodexInstallation.ts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ServerEnvironmentIdentity } from "../../environment/ServerEnvironment.ts";
@@ -94,7 +95,10 @@ const TestHttpClientLive = Layer.succeed(
   HttpClient.make((request) =>
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }))),
   ),
-).pipe(Layer.provideMerge(ModelManifest.layerTest));
+).pipe(
+  Layer.provideMerge(ModelManifest.layerTest),
+  Layer.provideMerge(OpenRouterCatalog.layerTest),
+);
 
 const BackgroundPolicyAlwaysRunLayer = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
   reportClientActivity: () => Effect.void,
@@ -2316,7 +2320,11 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const scope = yield* Scope.make();
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
-            Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            Layer.provideMerge(
+              ProviderInstanceRegistryHydrationLive.pipe(
+                Layer.provideMerge(OpenRouterCatalog.layerTest),
+              ),
+            ),
             Layer.provideMerge(AntigravityInstallation.layer),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2415,7 +2423,11 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const scope = yield* Scope.make();
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
-            Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            Layer.provideMerge(
+              ProviderInstanceRegistryHydrationLive.pipe(
+                Layer.provideMerge(OpenRouterCatalog.layerTest),
+              ),
+            ),
             Layer.provideMerge(AntigravityInstallation.layer),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2531,7 +2543,11 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
           const scope = yield* Scope.make();
           yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
           const providerRegistryLayer = ProviderRegistryLive.pipe(
-            Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+            Layer.provideMerge(
+              ProviderInstanceRegistryHydrationLive.pipe(
+                Layer.provideMerge(OpenRouterCatalog.layerTest),
+              ),
+            ),
             Layer.provideMerge(AntigravityInstallation.layer),
             Layer.provideMerge(
               Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),
@@ -2593,7 +2609,11 @@ it.layer(Layer.mergeAll(TestNodeServices, ServerSettingsModule.layerTest(), Test
             const scope = yield* Scope.make();
             yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
             const providerRegistryLayer = ProviderRegistryLive.pipe(
-              Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+              Layer.provideMerge(
+                ProviderInstanceRegistryHydrationLive.pipe(
+                  Layer.provideMerge(OpenRouterCatalog.layerTest),
+                ),
+              ),
               Layer.provideMerge(AntigravityInstallation.layer),
               Layer.provideMerge(
                 Layer.succeed(ServerSettingsModule.ServerSettingsService, serverSettings),

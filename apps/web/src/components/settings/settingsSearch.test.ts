@@ -529,3 +529,9 @@ describe("settings sidebar scope", () => {
     expect(isSettingsOverviewVisible({ project: "project", checkout: "checkout" })).toBe(true);
   });
 });
+
+it("OpenRouter search targets the selected environment's providers section", () => {
+  const item = searchSettings("OpenRouter").find((entry) => entry.id === "openrouter");
+  expect(item?.to).toBe("/settings/providers");
+  expect(getSettingsSearchTargetScope("openrouter")?.scope).toBe("environment");
+});

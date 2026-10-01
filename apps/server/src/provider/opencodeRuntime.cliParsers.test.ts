@@ -1,6 +1,7 @@
+import { resolveOpenCodeModelSlug } from "./opencodeRuntime.ts";
 import * as NodeAssert from "node:assert/strict";
 
-import { describe, it } from "vite-plus/test";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   parseAgentListCliOutput,
@@ -331,5 +332,20 @@ describe("toOpenCodeFileParts", () => {
     });
 
     NodeAssert.deepEqual(parts, []);
+  });
+});
+
+it("OpenRouter maps complete raw IDs including the auto namespace without changing native parsing", () => {
+  expect(resolveOpenCodeModelSlug("vendor/family/model", "openrouter")).toEqual({
+    providerID: "openrouter",
+    modelID: "vendor/family/model",
+  });
+  expect(resolveOpenCodeModelSlug("openrouter/auto", "openrouter")).toEqual({
+    providerID: "openrouter",
+    modelID: "openrouter/auto",
+  });
+  expect(resolveOpenCodeModelSlug("vendor/family/model")).toEqual({
+    providerID: "vendor",
+    modelID: "family/model",
   });
 });

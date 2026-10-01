@@ -1,3 +1,8 @@
+import {
+  runtimeEntry,
+  models as openRouterModels,
+  modelSlug as openRouterModelSlug,
+} from "../Drivers/OpenRouterDriver.testFixtures.ts";
 // @effect-diagnostics abortControllerInEffect:off - Tests hand-built AbortSignals to the SDK query stub to exercise cancellation.
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 // @effect-diagnostics nodeBuiltinImport:off
@@ -175,6 +180,7 @@ function makeHarness(config?: {
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
   readonly getSessionMessages?: ClaudeAdapterLiveOptions["getSessionMessages"];
   readonly forkSession?: ClaudeAdapterLiveOptions["forkSession"];
+  readonly modelCatalog?: ClaudeAdapterLiveOptions["modelCatalog"];
 }) {
   const query = new FakeClaudeQuery();
   const queries = [query];
@@ -189,7 +195,7 @@ function makeHarness(config?: {
     ...(config?.environment ? { environment: config.environment } : {}),
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
     ...(config?.scopedLimitNames ? { scopedLimitNames: config.scopedLimitNames } : {}),
-    modelCatalog: Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
+    modelCatalog: config?.modelCatalog ?? Effect.succeed(SYNTHETIC_CLAUDE_MODEL_CATALOG),
     ...(config?.getSessionMessages ? { getSessionMessages: config.getSessionMessages } : {}),
     ...(config?.forkSession ? { forkSession: config.forkSession } : {}),
     createQuery: (input) => {
@@ -8366,4 +8372,41 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+});
+
+it.effect("OpenRouter Claude SDK preserves raw slugs and settings-derived authentication", () => {
+  const entry = runtimeEntry("claudeAgent", "claude");
+  const environment = {
+    HOME: process.env.HOME,
+    ...Object.fromEntries((entry.environment ?? []).map((v) => [v.name, v.value])),
+  };
+  const harness = makeHarness({
+    instanceId: entry.instanceId,
+    environment,
+    claudeConfig: { homePath: "/tmp/openrouter-claude-sdk-home" },
+    modelCatalog: Effect.succeed({
+      models: openRouterModels.map((model) => ({ model, runtime: {}, compatibility: {} })),
+    }),
+  });
+  return Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    yield* adapter.startSession({
+      threadId: THREAD_ID,
+      runtimeMode: "full-access",
+      modelSelection: createModelSelection(entry.instanceId, openRouterModelSlug),
+    });
+    const options = harness.getLastCreateQueryInput()?.options;
+    assert.equal(options?.model, openRouterModelSlug);
+    assert.equal(options?.env?.ANTHROPIC_BASE_URL, "https://openrouter.ai/api");
+    assert.equal(options?.env?.ANTHROPIC_AUTH_TOKEN, "driver-sentinel-key");
+    assert.equal(options?.env?.ANTHROPIC_API_KEY, "");
+    assert.equal(options?.env?.HOME, process.env.HOME);
+    yield* adapter.sendTurn({
+      threadId: THREAD_ID,
+      input: "Test",
+      modelSelection: createModelSelection(entry.instanceId, "test-vendor/second-model"),
+    });
+    assert.deepEqual(harness.query.setModelCalls, ["test-vendor/second-model"]);
+    yield* adapter.stopSession(THREAD_ID);
+  }).pipe(Effect.provide(harness.layer));
 });

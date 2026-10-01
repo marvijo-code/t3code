@@ -541,3 +541,35 @@ describe("resolveDefaultProviderModelSelection", () => {
     ).toBeNull();
   });
 });
+
+describe("OpenRouter instance model isolation", () => {
+  it("keeps all three raw catalogs separate from native instances and avoids empty custom defaults", () => {
+    const snapshots = [
+      ...["codex", "claudeAgent", "opencode"].map((driver, index) =>
+        provider({
+          provider: ProviderDriverKind.make(driver),
+          instanceId: ["openrouter_codex", "openrouter_claude", "openrouter_opencode"][index]!,
+          models: [model("vendor/raw/model", false, true)],
+        }),
+      ),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        models: [model("native", false, true)],
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "custom_empty",
+        models: [],
+      }),
+    ];
+    const entries = deriveProviderInstanceEntries(snapshots);
+    expect(
+      entries
+        .slice(0, 3)
+        .map((entry) => getDefaultProviderInstanceModel(snapshots, entry.instanceId)),
+    ).toEqual(["vendor/raw/model", "vendor/raw/model", "vendor/raw/model"]);
+    expect(getDefaultProviderInstanceModel(snapshots, entries[3]!.instanceId)).toBe("native");
+    expect(getDefaultProviderInstanceModel(snapshots, entries[4]!.instanceId)).toBeUndefined();
+  });
+});

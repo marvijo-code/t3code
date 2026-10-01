@@ -1,3 +1,9 @@
+import {
+  runtimeEntry,
+  modelSlug as openRouterModelSlug,
+} from "../Drivers/OpenRouterDriver.testFixtures.ts";
+import { OPENROUTER_CODEX_ARGS } from "../OpenRouterProvider.ts";
+import { codexAppServerArgs } from "./codexLaunchArgs.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFS from "node:fs";
@@ -3193,3 +3199,59 @@ it.effect("managed turn failures preserve the sharing-limit code for client noti
     if (events[1]?.type === "turn.completed") NodeAssert.equal(events[1].payload.state, "failed");
   }).pipe(Effect.provide(layer));
 });
+
+it.effect(
+  "OpenRouter Codex adapter forwards final routing args and the exact selected slug",
+  () => {
+    const entry = runtimeEntry("codex", "codex");
+    const environment = Object.fromEntries((entry.environment ?? []).map((v) => [v.name, v.value]));
+    const factory = makeRuntimeFactory();
+    return Effect.gen(function* () {
+      const adapter = yield* makeCodexAdapter(
+        decodeCodexSettings({
+          homePath: "/tmp/openrouter-codex-test-home",
+          launchArgs: OPENROUTER_CODEX_ARGS,
+        }),
+        {
+          instanceId: entry.instanceId,
+          environment: { ...environment, T3CODE_CODEX_LAUNCH_ARGS: OPENROUTER_CODEX_ARGS },
+          makeRuntime: factory.factory,
+        },
+      );
+      const threadId = asThreadId("openrouter-test");
+      yield* adapter.startSession({
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: createModelSelection(entry.instanceId, openRouterModelSlug),
+      });
+      const options = factory.factory.mock.calls[0]?.[0];
+      NodeAssert.equal(options?.model, openRouterModelSlug);
+      NodeAssert.equal(options?.environment?.OPENROUTER_API_KEY, "driver-sentinel-key");
+      NodeAssert.ok(
+        codexAppServerArgs(options?.launchArgs).includes(
+          'model_providers.openrouter.wire_api="responses"',
+        ),
+      );
+      NodeAssert.ok(
+        !codexAppServerArgs(options?.launchArgs).join(" ").includes("driver-sentinel-key"),
+      );
+      yield* adapter.sendTurn({
+        threadId,
+        input: "Test",
+        modelSelection: createModelSelection(entry.instanceId, openRouterModelSlug),
+      });
+      NodeAssert.equal(
+        factory.lastRuntime?.sendTurnImpl.mock.calls[0]?.[0].model,
+        openRouterModelSlug,
+      );
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), { prefix: "t3-openrouter-codex-adapter-" }),
+      ),
+      Effect.provide(ServerSettingsService.layerTest()),
+      Effect.provide(providerSessionDirectoryTestLayer),
+      Effect.provide(NodeServices.layer),
+    );
+  },
+);

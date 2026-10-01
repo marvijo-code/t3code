@@ -223,7 +223,8 @@ function getProviderInstanceEntry(
 
 /**
  * Default model slug for a specific instance: its declared built-in default,
- * then its first built-in model, then any model it reports, then the driver-level default. Custom
+ * then its first built-in model, then any model it reports. Only canonical default instances
+ * fall back to a driver-level default. Custom
  * instances can serve a different model list than the default instance of
  * the same driver kind, so the lookup must be instance-scoped rather than
  * kind-scoped.
@@ -238,7 +239,9 @@ export function getDefaultProviderInstanceModel(
     entry.models.find((model) => model.isDefault && !model.isCustom)?.slug ??
     entry.models.find((model) => !model.isCustom)?.slug ??
     entry.models[0]?.slug ??
-    DEFAULT_MODEL_BY_PROVIDER[entry.driverKind]
+    (entry.instanceId === defaultInstanceIdForDriver(entry.driverKind)
+      ? DEFAULT_MODEL_BY_PROVIDER[entry.driverKind]
+      : undefined)
   );
 }
 

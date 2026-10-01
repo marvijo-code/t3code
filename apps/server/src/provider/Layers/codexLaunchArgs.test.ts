@@ -1,3 +1,4 @@
+import { OPENROUTER_CODEX_ARGS } from "../OpenRouterProvider.ts";
 import * as NodeAssert from "node:assert/strict";
 
 import { describe, it } from "vite-plus/test";
@@ -56,4 +57,18 @@ describe("codexExecLaunchArgs", () => {
       "--strict-config",
     ]);
   });
+});
+
+it("OpenRouter TOML quoting survives app-server and exec tokenization", () => {
+  const expected = [
+    'model_provider="openrouter"',
+    'model_providers.openrouter.name="OpenRouter"',
+    'model_providers.openrouter.base_url="https://openrouter.ai/api/v1"',
+    'model_providers.openrouter.env_key="OPENROUTER_API_KEY"',
+    'model_providers.openrouter.wire_api="responses"',
+    "model_providers.openrouter.requires_openai_auth=false",
+    "model_providers.openrouter.supports_websockets=false",
+  ].flatMap((value) => ["-c", value]);
+  NodeAssert.deepEqual(codexAppServerArgs(OPENROUTER_CODEX_ARGS), ["app-server", ...expected]);
+  NodeAssert.deepEqual(codexExecLaunchArgs(OPENROUTER_CODEX_ARGS), expected);
 });

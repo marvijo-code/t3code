@@ -47,3 +47,13 @@ restart before T3 Code can see configuration changes.
 
 Existing threads keep their selected model and options even when it disappears
 from the catalog. If OpenCode rejects that model, select an available one and retry.
+
+## OpenRouter
+
+In **Settings > Providers > OpenRouter**, save your OpenRouter API key on the execution
+environment, test the connection, and enable **Use OpenRouter for OpenCode**. Select
+**OpenRouter (OpenCode)** and an OpenRouter model when starting a thread. The environment
+still needs the `opencode` executable installed. Setup is per connected environment;
+the key stays on that server. Key and switch changes reconnect the affected harness,
+while retaining thread history. Removing the key turns all OpenRouter switches off.
+Separate custom instances remain available for advanced setups.

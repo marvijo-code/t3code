@@ -432,6 +432,15 @@ export function parseOpenCodeModelSlug(
   };
 }
 
+/** A fixed backend keeps the complete catalog slug as OpenCode's model ID. */
+export function resolveOpenCodeModelSlug(
+  slug: string | null | undefined,
+  providerID?: "openrouter",
+): ParsedOpenCodeModelSlug | null {
+  if (providerID) return slug?.trim() ? { providerID, modelID: slug.trim() } : null;
+  return parseOpenCodeModelSlug(slug);
+}
+
 export function openCodeQuestionId(
   index: number,
   question: QuestionRequest["questions"][number],

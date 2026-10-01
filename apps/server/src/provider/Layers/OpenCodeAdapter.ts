@@ -52,7 +52,7 @@ import {
   openCodeQuestionId,
   openCodeRuntimeErrorDetail,
   loadOpenCodeCommands,
-  parseOpenCodeModelSlug,
+  resolveOpenCodeModelSlug,
   runOpenCodeSdk,
   toOpenCodeFileParts,
   toOpenCodePermissionReply,
@@ -458,6 +458,7 @@ function takeOpenCodeTurnTokenUsage(
 }
 
 export interface OpenCodeAdapterLiveOptions {
+  readonly modelProvider?: "openrouter";
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogPath?: string;
@@ -3108,7 +3109,7 @@ export function makeOpenCodeAdapter(
           issue: `OpenCode model selection is bound to instance '${modelSelection?.instanceId}', expected '${boundInstanceId}'.`,
         });
       }
-      const parsedModel = parseOpenCodeModelSlug(modelSelection?.model);
+      const parsedModel = resolveOpenCodeModelSlug(modelSelection?.model, options?.modelProvider);
       if (!parsedModel) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
@@ -3564,7 +3565,7 @@ export function makeOpenCodeAdapter(
           issue: `OpenCode model selection is bound to instance '${modelSelection.instanceId}', expected '${boundInstanceId}'.`,
         });
       }
-      const parsedModel = parseOpenCodeModelSlug(modelSelection?.model);
+      const parsedModel = resolveOpenCodeModelSlug(modelSelection?.model, options?.modelProvider);
       if (!parsedModel) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,

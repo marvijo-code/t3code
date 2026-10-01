@@ -112,6 +112,7 @@ export function defaultProviderContinuationIdentity(input: {
  * `driver.configSchema`. Drivers never decode their own raw envelope.
  */
 export interface ProviderDriverCreateInput<Config> {
+  readonly integration?: "openrouter" | undefined;
   readonly instanceId: ProviderInstanceId;
   readonly displayName: string | undefined;
   readonly accentColor?: string | undefined;

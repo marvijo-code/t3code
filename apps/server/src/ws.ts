@@ -1,3 +1,7 @@
+import { makeServerSettingsTransport } from "./serverSettingsTransport.ts";
+import { testOpenRouterConnection } from "./provider/OpenRouterConnection.ts";
+import { OpenRouterCatalog } from "./provider/OpenRouterCatalog.ts";
+import { HttpClient } from "effect/unstable/http";
 import {
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
@@ -151,7 +155,11 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
+import {
+  authorizeEffectForScopes,
+  requiredScopeForRpcMethod,
+  requiredScopeForDeviceList,
+} from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
@@ -566,6 +574,8 @@ const makeWsRpcLayer = (
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const modelManifest = yield* ModelManifest.ModelManifest;
+      const openRouterCatalog = yield* OpenRouterCatalog;
+      const openRouterHttp = yield* HttpClient.HttpClient;
       const providerVersionCache = yield* ProviderMaintenance.ProviderVersionCache;
       const providerService = yield* ProviderService.ProviderService;
       const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -672,6 +682,7 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
+      const settingsTransport = makeServerSettingsTransport(serverSettings);
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -681,9 +692,7 @@ const makeWsRpcLayer = (
         requiredScope: AuthEnvironmentScope,
         effect: Effect.Effect<A, E, R>,
       ): Effect.Effect<A, E | EnvironmentAuthorizationError, R> =>
-        currentSession.scopes.includes(requiredScope)
-          ? effect
-          : Effect.fail(authorizationError(requiredScope));
+        authorizeEffectForScopes(currentSession.scopes, requiredScope, effect);
       const authorizeStream = <A, E, R>(
         requiredScope: AuthEnvironmentScope,
         stream: Stream.Stream<A, E, R>,
@@ -1813,9 +1822,7 @@ const makeWsRpcLayer = (
           const providers = options.usageLimitsCommand
             ? withUsageLimitsCommands(currentProviders, yield* usageLimitSources.current)
             : currentProviders;
-          const settings = ServerSettings.redactServerSettingsForClient(
-            yield* serverSettings.getSettings,
-          );
+          const settings = yield* settingsTransport.get;
           const environment = yield* serverEnvironment.getDescriptor;
           const auth = yield* serverAuth.getDescriptor();
           const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
@@ -2367,6 +2374,16 @@ const makeWsRpcLayer = (
               // discovery and background status checks retain their timers.
               if (input.refreshModels) {
                 yield* modelManifest.forceRefresh;
+                const settings = yield* serverSettings.getSettings.pipe(
+                  Effect.orElseSucceed(() => undefined),
+                );
+                if (
+                  settings &&
+                  (settings.openRouter.codex ||
+                    settings.openRouter.claudeCode ||
+                    settings.openRouter.openCode)
+                )
+                  yield* openRouterCatalog.forceRefresh;
                 const instances = yield* providerInstances.listInstances;
                 yield* Effect.forEach(
                   instances.filter(
@@ -2612,14 +2629,17 @@ const makeWsRpcLayer = (
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverGetSettings]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverGetSettings, settingsTransport.get, {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverTestOpenRouterConnection]: () =>
           observeRpcEffect(
-            WS_METHODS.serverGetSettings,
-            serverSettings.getSettings.pipe(
-              Effect.map(ServerSettings.redactServerSettingsForClient),
+            WS_METHODS.serverTestOpenRouterConnection,
+            testOpenRouterConnection.pipe(
+              Effect.provideService(ServerSettings.ServerSettingsService, serverSettings),
+              Effect.provideService(HttpClient.HttpClient, openRouterHttp),
             ),
-            {
-              "rpc.aggregate": "server",
-            },
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(
@@ -2630,11 +2650,11 @@ const makeWsRpcLayer = (
                     Effect.provide(deviceHostContext),
                   )
                 : undefined;
-              const settings = yield* serverSettings.updateSettings({
+              const settings = yield* settingsTransport.update({
                 ...patch,
                 ...(deviceHosts ? { deviceHosts } : {}),
               });
-              return ServerSettings.redactServerSettingsForClient(settings);
+              return settings;
             }),
             {
               "rpc.aggregate": "server",
@@ -3695,14 +3715,7 @@ const makeWsRpcLayer = (
                       })),
                     )
                   : Stream.empty;
-              const settingsUpdates = serverSettings.streamChanges.pipe(
-                Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
-                Stream.map((settings) => ({
-                  version: 1 as const,
-                  type: "settingsUpdated" as const,
-                  payload: { settings },
-                })),
-              );
+              const settingsUpdates = settingsTransport.changes;
 
               const liveUpdates = Stream.merge(
                 keybindingsUpdates,

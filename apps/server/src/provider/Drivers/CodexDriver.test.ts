@@ -1,3 +1,13 @@
+import { CodexSettings } from "@t3tools/contracts";
+import {
+  OpenRouterDriverTestLayer,
+  runtimeEntry,
+  models as openRouterModels,
+  modelSlug as openRouterModelSlug,
+} from "./OpenRouterDriver.testFixtures.ts";
+import { writeFakeCli } from "../../testUtils/fakeCli.ts";
+import { createModelSelection as createOpenRouterModelSelection } from "@t3tools/shared/model";
+import * as OpenRouterCatalog from "../OpenRouterCatalog.ts";
 import { CodexInstallation } from "../CodexInstallation.ts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ServerEnvironmentIdentity } from "../../environment/ServerEnvironment.ts";
@@ -51,6 +61,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
   ),
   Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(ModelManifest.layerTest),
+  Layer.provideMerge(OpenRouterCatalog.layerTest),
   Layer.provideMerge(ResetCreditCoordinator.layerTest),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({
@@ -528,3 +539,70 @@ it.layer(testLayer)("CodexDriver", (it) => {
     { skip: windowsHost },
   );
 });
+
+it.layer(OpenRouterDriverTestLayer)("OpenRouter CodexDriver", (it) => {
+  it.effect(
+    "passes settings credentials, isolated CODEX_HOME and routing overrides into codex exec",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        const config = yield* ServerConfig;
+        const capture = `${directory}/capture.json`;
+        const binaryPath = writeFakeCli({
+          directory,
+          name: "codex",
+          source: `
+      import { writeFileSync } from "node:fs";
+      const args = process.argv.slice(2);
+      if (args.includes("--version")) { console.log("codex-cli 0.139.0"); process.exit(0); }
+      for await (const chunk of process.stdin) {}
+      writeFileSync(${JSON.stringify(capture)}, JSON.stringify({args, home:process.env.CODEX_HOME, key:process.env.OPENROUTER_API_KEY}));
+      writeFileSync(args[args.indexOf("--output-last-message")+1], JSON.stringify({title:"OpenRouter title"}));
+    `,
+        });
+        const entry = runtimeEntry("codex", `~/${NodePath.relative(NodeOS.homedir(), binaryPath)}`);
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const spawned: string[] = [];
+        const recordingSpawner = ChildProcessSpawner.make((command) => {
+          if (ChildProcess.isStandardCommand(command)) spawned.push(command.command);
+          return spawner.spawn(command);
+        });
+        const instance = yield* CodexDriver.create({
+          ...entry,
+          enabled: true,
+          displayName: entry.displayName,
+          environment: entry.environment ?? [],
+          config: decodeOpenRouterCodex(entry.config),
+        }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, recordingSpawner));
+        expect((yield* instance.snapshot.getSnapshot).models).toEqual(openRouterModels);
+        expect(instance.auth).toBeUndefined();
+        const presentation = yield* instance.snapshot.getSnapshot;
+        expect(presentation.supportsConversationRollback).not.toBe(false);
+        expect(presentation.reportsContextWindow).toBe(true);
+        expect(presentation.showInteractionModeToggle).toBe(true);
+        const title = yield* instance.textGeneration.generateThreadTitle({
+          cwd: directory,
+          message: "Test",
+          modelSelection: createOpenRouterModelSelection(entry.instanceId, openRouterModelSlug),
+        });
+        expect(title.title).toBe("OpenRouter title");
+        expect(
+          spawned.filter((command) => command.includes(binaryPath)).length,
+        ).toBeGreaterThanOrEqual(2);
+        expect(spawned.some((command) => command.startsWith("~"))).toBe(false);
+        const captured = JSON.parse(yield* fs.readFileString(capture));
+        expect(captured.args).toContain(openRouterModelSlug);
+        expect(captured.args).toContain('model_provider="openrouter"');
+        expect(captured.args).toContain('model_providers.openrouter.env_key="OPENROUTER_API_KEY"');
+        expect(captured.args).toContain(
+          'model_providers.openrouter.base_url="https://openrouter.ai/api/v1"',
+        );
+        expect(captured.args.join(" ")).not.toContain("driver-sentinel-key");
+        expect(captured.home).toBe(`${config.stateDir}/provider-homes/${entry.instanceId}`);
+        expect(captured.key).toBe("driver-sentinel-key");
+      }),
+  );
+});
+
+const decodeOpenRouterCodex = Schema.decodeUnknownSync(CodexSettings);

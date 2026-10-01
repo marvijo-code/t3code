@@ -1,3 +1,4 @@
+import { reconcileOpenRouterSettings, OPENROUTER_SECRET } from "./provider/OpenRouterSettings.ts";
 /**
  * ServerSettings - Server-authoritative settings service.
  *
@@ -199,8 +200,16 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
     accessToken: redactSecret(settings.bitbucket.accessToken),
     apiToken: redactSecret(settings.bitbucket.apiToken),
   };
-  return { ...settings, providerInstances, usageLimitSources, bitbucket };
+  return {
+    ...settings,
+    providerInstances,
+    usageLimitSources,
+    bitbucket,
+    openRouter: { ...settings.openRouter, apiKey: redactSecret(settings.openRouter.apiKey) },
+  };
 }
+
+const isServerSettingsError = Schema.is(ServerSettingsError);
 
 export class ServerSettingsService extends Context.Service<
   ServerSettingsService,
@@ -248,18 +257,32 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
         ? { providerHealthRefreshInterval: providerHealthRefreshInterval as Duration.Duration }
         : {}),
     });
-    const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+    const currentSettingsRef = yield* Ref.make<ServerSettings>(
+      reconcileOpenRouterSettings(initialSettings),
+    );
+    const testSemaphore = yield* Semaphore.make(1);
 
     return {
       start: Effect.void,
       ready: Effect.void,
       getSettings: Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider)),
       updateSettings: (patch) =>
-        Ref.get(currentSettingsRef).pipe(
-          Effect.map((currentSettings) => applyServerSettingsPatch(currentSettings, patch)),
-          Effect.flatMap(normalizeServerSettings),
-          Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-          Effect.map(resolveTextGenerationProvider),
+        testSemaphore.withPermits(1)(
+          Ref.get(currentSettingsRef).pipe(
+            Effect.flatMap((currentSettings) =>
+              Effect.try({
+                try: () =>
+                  reconcileOpenRouterSettings(
+                    applyServerSettingsPatch(currentSettings, patch),
+                    currentSettings,
+                  ),
+                catch: (error) => error as ServerSettingsError,
+              }),
+            ),
+            Effect.flatMap(normalizeServerSettings),
+            Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+            Effect.map(resolveTextGenerationProvider),
+          ),
         ),
       streamChanges: Stream.empty,
       subscribeChanges: Effect.succeed(Stream.empty),
@@ -594,7 +617,22 @@ const make = Effect.gen(function* () {
         bitbucket[field] = SECRET_REDACTED;
         moved = true;
       }
-      return moved ? { ...settings, bitbucket } : settings;
+      let openRouter = settings.openRouter;
+      if (openRouter.apiKey && openRouter.apiKey !== SECRET_REDACTED) {
+        yield* secretStore.set(OPENROUTER_SECRET, textEncoder.encode(openRouter.apiKey)).pipe(
+          Effect.mapError(
+            () =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "write-secret",
+                cause: undefined,
+              }),
+          ),
+        );
+        openRouter = { ...openRouter, apiKey: SECRET_REDACTED };
+        moved = true;
+      }
+      return moved ? { ...settings, bitbucket, openRouter } : settings;
     });
 
   const loadSettingsFromDisk = Effect.gen(function* () {
@@ -686,7 +724,34 @@ const make = Effect.gen(function* () {
     if (migrated !== loaded) {
       yield* writeSettingsAtomically(migrated);
     }
-    return migrated;
+    const materializedKey =
+      migrated.openRouter.apiKey === SECRET_REDACTED
+        ? yield* secretStore.get(OPENROUTER_SECRET).pipe(
+            Effect.map((value) => (Option.isSome(value) ? textDecoder.decode(value.value) : "")),
+            Effect.mapError(
+              () =>
+                new ServerSettingsError({
+                  settingsPath,
+                  operation: "read-secret",
+                  cause: undefined,
+                }),
+            ),
+          )
+        : migrated.openRouter.apiKey;
+    return yield* Effect.try({
+      try: () =>
+        reconcileOpenRouterSettings({
+          ...migrated,
+          openRouter: { ...migrated.openRouter, apiKey: materializedKey ? SECRET_REDACTED : "" },
+        }),
+      catch: () =>
+        new ServerSettingsError({
+          settingsPath,
+          operation: "normalize",
+          cause: undefined,
+          detail: "Invalid OpenRouter instance configuration.",
+        }),
+    });
   });
 
   const settingsCache = yield* Cache.make<typeof cacheKey, ServerSettings, ServerSettingsError>({
@@ -753,6 +818,20 @@ const make = Effect.gen(function* () {
           managementKey: Option.isSome(secret) ? textDecoder.decode(secret.value) : "",
         };
       }
+      const openRouter = { ...settings.openRouter };
+      if (openRouter.apiKey === SECRET_REDACTED) {
+        const secret = yield* secretStore.get(OPENROUTER_SECRET).pipe(
+          Effect.mapError(
+            () =>
+              new ServerSettingsError({
+                settingsPath,
+                operation: "read-secret",
+                cause: undefined,
+              }),
+          ),
+        );
+        openRouter.apiKey = Option.isSome(secret) ? textDecoder.decode(secret.value) : "";
+      }
       const bitbucket = { ...settings.bitbucket };
       for (const field of BITBUCKET_SECRET_FIELDS) {
         if (bitbucket[field] !== SECRET_REDACTED) continue;
@@ -769,6 +848,7 @@ const make = Effect.gen(function* () {
         ...settings,
         providerInstances: providerInstances as ServerSettings["providerInstances"],
         usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+        openRouter,
         bitbucket,
       };
     });
@@ -911,6 +991,23 @@ const make = Effect.gen(function* () {
         });
       }
 
+      const openRouter = { ...next.openRouter };
+      if (openRouter.apiKey !== SECRET_REDACTED) {
+        if (openRouter.apiKey) {
+          changes.push({
+            kind: "write",
+            secretName: OPENROUTER_SECRET,
+            value: textEncoder.encode(openRouter.apiKey),
+          });
+          openRouter.apiKey = SECRET_REDACTED;
+        } else if (current.openRouter.apiKey) {
+          changes.push({
+            kind: "remove",
+            secretName: OPENROUTER_SECRET,
+            operation: "remove-secret",
+          });
+        }
+      }
       const bitbucket = { ...next.bitbucket };
       for (const field of BITBUCKET_SECRET_FIELDS) {
         let value = bitbucket[field];
@@ -935,6 +1032,7 @@ const make = Effect.gen(function* () {
           ...next,
           providerInstances: providerInstances as ServerSettings["providerInstances"],
           usageLimitSources: usageLimitSources as ServerSettings["usageLimitSources"],
+          openRouter,
           bitbucket,
         },
         changes,
@@ -960,7 +1058,7 @@ const make = Effect.gen(function* () {
             Effect.logWarning("failed to roll back provider environment secret", {
               providerInstanceId: write.providerInstanceId,
               environmentVariable: write.environmentVariable,
-              cause,
+              cause: write.secretName === OPENROUTER_SECRET ? undefined : cause,
             }),
           ),
         ),
@@ -987,7 +1085,7 @@ const make = Effect.gen(function* () {
                   operation: "read-secret",
                   providerInstanceId: change.providerInstanceId,
                   environmentVariable: change.environmentVariable,
-                  cause,
+                  cause: change.secretName === OPENROUTER_SECRET ? undefined : cause,
                 }),
             ),
           );
@@ -1005,7 +1103,7 @@ const make = Effect.gen(function* () {
                   operation: change.kind === "write" ? "write-secret" : change.operation,
                   providerInstanceId: change.providerInstanceId,
                   environmentVariable: change.environmentVariable,
-                  cause,
+                  cause: change.secretName === OPENROUTER_SECRET ? undefined : cause,
                 }),
             ),
           );
@@ -1023,7 +1121,30 @@ const make = Effect.gen(function* () {
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
-        const updated = applyServerSettingsPatch(current, patch);
+        const active = yield* materializeProviderEnvironmentSecrets(current);
+        const merged = applyServerSettingsPatch(active, {
+          ...patch,
+          ...(patch.openRouter?.apiKey === SECRET_REDACTED
+            ? { openRouter: { ...patch.openRouter, apiKey: active.openRouter.apiKey } }
+            : {}),
+        });
+        let updated = yield* Effect.try({
+          try: () => reconcileOpenRouterSettings(merged, active),
+          catch: (error) =>
+            isServerSettingsError(error)
+              ? error
+              : new ServerSettingsError({ settingsPath, operation: "normalize", cause: undefined }),
+        });
+        // Keep unchanged credentials as markers to avoid rewriting shared secrets.
+        if (patch.openRouter?.apiKey === undefined || patch.openRouter.apiKey === SECRET_REDACTED) {
+          updated = {
+            ...updated,
+            openRouter: {
+              ...updated.openRouter,
+              apiKey: current.openRouter.apiKey && active.openRouter.apiKey ? SECRET_REDACTED : "",
+            },
+          };
+        }
         const persisted = yield* persistProviderEnvironmentSecrets(current, updated);
         const next = yield* normalizeServerSettings(persisted.settings);
         const materialized = yield* Effect.uninterruptibleMask(() =>

@@ -1,3 +1,8 @@
+import {
+  OpenRouterDriverTestLayer,
+  runtimeEntry,
+} from "../Drivers/OpenRouterDriver.testFixtures.ts";
+import * as OpenRouterCatalog from "../OpenRouterCatalog.ts";
 import { CodexInstallation } from "../CodexInstallation.ts";
 import { ServerSecretStore } from "../../auth/ServerSecretStore.ts";
 import { ServerEnvironmentIdentity } from "../../environment/ServerEnvironment.ts";
@@ -266,6 +271,7 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
     Layer.provideMerge(TestHttpClientLive),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     Layer.provideMerge(ModelManifest.layerTest),
+    Layer.provideMerge(OpenRouterCatalog.layerTest),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
 
@@ -635,6 +641,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
     Layer.provideMerge(TestHttpClientLive),
     Layer.provideMerge(Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers)),
     Layer.provideMerge(ModelManifest.layerTest),
+    Layer.provideMerge(OpenRouterCatalog.layerTest),
     Layer.provideMerge(ResetCreditCoordinator.layerTest),
   );
 
@@ -797,5 +804,59 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         `${openCodeDriverKind}:instance:${openCodeId}`,
       );
     }).pipe(Effect.provide(testLayer)),
+  );
+});
+
+it.layer(OpenRouterDriverTestLayer)("OpenRouter registry lifecycle", (it) => {
+  it.effect(
+    "forwards integration and rotates only owned scopes while retaining normal instance identity",
+    () =>
+      Effect.gen(function* () {
+        const finalized: string[] = [];
+        const seen: Array<string | undefined> = [];
+        const driver = {
+          ...CodexDriver,
+          create: (input: Parameters<typeof CodexDriver.create>[0]) =>
+            Effect.gen(function* () {
+              seen.push(input.integration);
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => {
+                  finalized.push(input.instanceId);
+                }),
+              );
+              return yield* CodexDriver.create(input);
+            }),
+        };
+        const entry = runtimeEntry("codex", "codex");
+        const configMap = {
+          codex: { driver: ProviderDriverKind.make("codex"), enabled: false, config: {} },
+          openrouter_codex: { ...entry, enabled: false },
+        };
+        const { registry, mutator } = yield* makeProviderInstanceRegistry({
+          drivers: [driver],
+          configMap,
+        });
+        expect(seen).toEqual([undefined, "openrouter"]);
+        const normal = yield* registry.getInstance(ProviderInstanceId.make("codex"));
+        const owned = yield* registry.getInstance(entry.instanceId);
+        yield* mutator.reconcile({
+          ...configMap,
+          openrouter_codex: {
+            ...configMap.openrouter_codex,
+            environment: [{ name: "OPENROUTER_API_KEY", value: "rotated-key", sensitive: true }],
+          },
+        });
+        expect(finalized).toEqual(["openrouter_codex"]);
+        expect(yield* registry.getInstance(ProviderInstanceId.make("codex"))).toBe(normal);
+        expect(yield* registry.getInstance(entry.instanceId)).not.toBe(owned);
+        yield* mutator.reconcile({
+          ...configMap,
+          openrouter_codex: {
+            ...configMap.openrouter_codex,
+            environment: [{ name: "OPENROUTER_API_KEY", value: "", sensitive: true }],
+          },
+        });
+        expect(finalized).toEqual(["openrouter_codex", "openrouter_codex"]);
+      }),
   );
 });

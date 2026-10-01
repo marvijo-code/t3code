@@ -97,8 +97,9 @@ function appendUnavailableDynamicModelSelection(
   provider: ProviderDriverKind,
   selectedModel: string | null | undefined,
   hiddenModels: ReadonlyArray<string>,
+  customInstance = false,
 ): AppModelOption[] {
-  if (provider !== "opencode" && provider !== "antigravity") return options;
+  if (!customInstance && provider !== "opencode" && provider !== "antigravity") return options;
   const slug = normalizeCustomModelSlug(selectedModel);
   if (!slug) return options;
   if (provider === "antigravity" && slug === ANTIGRAVITY_DEFAULT_MODEL) return options;
@@ -269,6 +270,7 @@ export function getAppModelOptionsForInstance(
     entry.driverKind,
     selectedModel,
     preferences.hiddenModels,
+    entry.instanceId !== defaultInstanceIdForDriver(entry.driverKind),
   );
 }
 
@@ -308,7 +310,9 @@ export function resolveAppModelSelectionForInstance(
   }
   if (
     resolutionOptions?.preserveUnavailableSelection &&
-    (entry.driverKind === "opencode" || entry.driverKind === "antigravity")
+    (entry.instanceId !== defaultInstanceIdForDriver(entry.driverKind) ||
+      entry.driverKind === "opencode" ||
+      entry.driverKind === "antigravity")
   ) {
     const unavailableSelection = normalizeCustomModelSlug(selectedModel);
     const hiddenModels = readInstanceModelPreferences(settings, entry.instanceId).hiddenModels;
@@ -421,9 +425,12 @@ export function resolveAppModelSelectionState(
         settings,
         supportedProviders,
         selectedModel,
+        { preserveUnavailableSelection: true },
       ) ??
       entry.models[0]?.slug ??
-      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind];
+      (String(entry.instanceId) === String(entry.driverKind)
+        ? DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind]
+        : undefined);
     if (!model) {
       return createModelSelection(entry.instanceId, "", []);
     }

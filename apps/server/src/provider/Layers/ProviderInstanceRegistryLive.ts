@@ -178,6 +178,7 @@ const buildEntry = <R>(input: {
         instanceId,
         displayName: entry.displayName,
         accentColor: entry.accentColor,
+        integration: entry.integration,
         environment: entry.environment ?? [],
         enabled: resolveEntryEnabled(entry, typedConfig),
         config: typedConfig,
