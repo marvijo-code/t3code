@@ -67,6 +67,15 @@ describe("RPC authorization scopes", () => {
     );
   });
 
+  it("requires operate permission to change or test the OpenRouter key", () => {
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverConfigureOpenRouter)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+    expect(requiredScopeForRpcMethod(WS_METHODS.serverTestOpenRouterConnection)).toBe(
+      AuthOrchestrationOperateScope,
+    );
+  });
+
   it("rejects unknown RPC method names", () => {
     for (const method of ["server.notRegistered", "toString", "constructor"]) {
       expect(() => requiredScopeForRpcMethod(method)).toThrow(

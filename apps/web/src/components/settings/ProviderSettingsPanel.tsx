@@ -83,6 +83,7 @@ import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 import { ExpandableText } from "./ExpandableText";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { UsageProviderSettings } from "./UsageProviderSettings";
+import { OpenRouterSettings } from "./OpenRouterSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
@@ -1160,6 +1161,13 @@ export function EnvironmentProviderSettings({
           </div>
         </SettingsGroup>
       </SettingsSection>
+
+      <OpenRouterSettings
+        // Drafts belong to one environment; switching must not carry them over.
+        key={`openrouter:${environmentId}`}
+        environmentId={environmentId}
+        readOnly={readOnly}
+      />
 
       <UsageProviderSettings
         key={environmentId}

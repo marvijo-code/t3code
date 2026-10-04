@@ -113,6 +113,7 @@ import {
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as OpenRouter from "./provider/OpenRouter.ts";
 import * as ProviderMaintenance from "./provider/providerMaintenance.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
@@ -569,6 +570,7 @@ const makeWsRpcLayer = (
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
       const modelManifest = yield* ModelManifest.ModelManifest;
+      const openRouter = yield* OpenRouter.OpenRouter;
       const providerVersionCache = yield* ProviderMaintenance.ProviderVersionCache;
       const providerService = yield* ProviderService.ProviderService;
       const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
@@ -2902,6 +2904,16 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverConfigureOpenRouter]: (input) =>
+          observeRpcEffect(WS_METHODS.serverConfigureOpenRouter, openRouter.configure(input), {
+            "rpc.aggregate": "server",
+          }),
+        [WS_METHODS.serverTestOpenRouterConnection]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverTestOpenRouterConnection,
+            openRouter.testConnection(input),
+            { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverDiscoverSourceControl]: (_input) =>
           observeRpcEffect(

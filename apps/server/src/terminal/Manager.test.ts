@@ -2123,6 +2123,7 @@ it.layer(
         start: Effect.void,
         ready: Effect.void,
         getSettings: Effect.fail(settingsError),
+        updateSettingsWith: () => Effect.die(new Error("unused in this test")),
         updateSettings: () => Effect.fail(settingsError),
         streamChanges: Stream.empty,
         subscribeChanges: Effect.succeed(Stream.empty),

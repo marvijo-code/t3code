@@ -28,6 +28,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as OpenRouter from "../OpenRouter.ts";
 import {
   createProviderVersionAdvisory,
   ProviderVersionCache,
@@ -51,6 +52,7 @@ const testLayer = ServerConfig.layerTest(process.cwd(), {
   ),
   Layer.provideMerge(ServerSettingsService.layerTest()),
   Layer.provideMerge(ModelManifest.layerTest),
+  Layer.provideMerge(OpenRouter.layerTest()),
   Layer.provideMerge(ResetCreditCoordinator.layerTest),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({

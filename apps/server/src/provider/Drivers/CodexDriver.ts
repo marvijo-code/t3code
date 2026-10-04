@@ -48,6 +48,8 @@ import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as OpenRouter from "../OpenRouter.ts";
+import { ensureOpenRouterCodexLaunchArgs } from "../openRouterInstances.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
@@ -112,6 +114,7 @@ export type CodexDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | ModelManifest.ModelManifest
+  | OpenRouter.OpenRouter
   | Path.Path
   | ProviderEventLoggers
   | ServerConfig
@@ -128,7 +131,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   },
   configSchema: CodexSettings,
   defaultConfig: (): CodexSettings => decodeCodexSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({ instanceId, integration, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       if (config.setupMode === "managed")
         return yield* makeManagedCodexProvider({
@@ -147,9 +150,23 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const serverSettings = yield* ServerSettingsService;
       const eventLoggers = yield* ProviderEventLoggers;
       const modelManifest = yield* ModelManifest.ModelManifest;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      const mergedEnv = mergeProviderInstanceEnvironment(environment);
+      const openRouter = OpenRouter.instanceSupport(yield* OpenRouter.OpenRouter, {
+        instanceId,
+        driverKind: DRIVER_KIND,
+        integration,
+      });
+      // T3CODE_CODEX_LAUNCH_ARGS outranks the instance's launch args, which would
+      // silently drop the OpenRouter routing and send the model slug to OpenAI.
+      // A managed instance folds the override into its launch args instead.
+      const { T3CODE_CODEX_LAUNCH_ARGS: _launchArgsOverride, ...managedEnv } = mergedEnv;
+      const processEnv = openRouter.managed ? managedEnv : mergedEnv;
       const homeLayout = yield* resolveCodexHomeLayout(config);
-      const continuationIdentity = codexContinuationIdentity(homeLayout);
+      const homeContinuationIdentity = codexContinuationIdentity(homeLayout);
+      const continuationIdentity = {
+        ...homeContinuationIdentity,
+        continuationKey: openRouter.continuationKey(homeContinuationIdentity.continuationKey),
+      };
       const stampIdentity = withInstanceIdentity({
         instanceId,
         driverKind: DRIVER_KIND,
@@ -170,6 +187,9 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       );
       const effectiveConfig = {
         ...config,
+        launchArgs: openRouter.managed
+          ? ensureOpenRouterCodexLaunchArgs(resolveCodexLaunchArgs(config.launchArgs, mergedEnv))
+          : config.launchArgs,
         enabled,
         binaryPath: expandHomePath(config.binaryPath),
         homePath: homeLayout.effectiveHomePath ?? "",
@@ -198,13 +218,20 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const checkProvider = modelManifest.refreshInBackground.pipe(
         Effect.andThen(
           Effect.zipWith(
-            checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
+            checkCodexProviderStatus(
+              effectiveConfig,
+              undefined,
+              processEnv,
+              openRouter.managed ? OpenRouter.OPENROUTER_PROVIDER_AUTH : undefined,
+            ),
             modelManifest.current,
-            (draft, manifest) =>
-              stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
+            (draft, manifest) => ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND),
             { concurrent: true },
           ),
         ),
+        // After the manifest: it would classify every OpenRouter slug as legacy.
+        Effect.flatMap(openRouter.checked),
+        Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
@@ -217,9 +244,8 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           Effect.zipWith(
             makePendingCodexProvider(settings.provider),
             modelManifest.current,
-            (draft, manifest) =>
-              stampIdentity(ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND)),
-          ),
+            (draft, manifest) => ModelManifest.applyModelManifest(draft, manifest, DRIVER_KIND),
+          ).pipe(Effect.flatMap(openRouter.pending), Effect.map(stampIdentity)),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
           resolveMaintenance().pipe(
@@ -358,6 +384,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
+        invalidateCaches: openRouter.invalidate,
         snapshotForCwd,
         consumeResetCredit,
         adapter,

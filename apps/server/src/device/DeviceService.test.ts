@@ -144,6 +144,7 @@ const fixture = Effect.fn("fixture")(function* (
         start: Effect.void,
         ready: Effect.void,
         getSettings: Ref.get(settings),
+        updateSettingsWith: () => Effect.die(new Error("unused in this test")),
         updateSettings: (patch) =>
           Ref.updateAndGet(settings, (current) => ({
             ...current,

@@ -123,6 +123,11 @@ export type ProviderInstanceEnvironment = typeof ProviderInstanceEnvironment.Typ
  */
 export const ProviderInstanceConfig = Schema.Struct({
   driver: ProviderDriverKind,
+  /**
+   * Set by the server on instances an integration (OpenRouter setup) created and manages.
+   * Clients can neither add nor remove it, so a user's own instance is never taken over.
+   */
+  integration: Schema.optionalKey(Schema.Literal("openrouter")),
   displayName: Schema.optional(TrimmedNonEmptyString),
   accentColor: Schema.optional(TrimmedNonEmptyString),
   environment: Schema.optionalKey(ProviderInstanceEnvironment),

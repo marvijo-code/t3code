@@ -546,6 +546,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "openrouter",
+    title: "OpenRouter",
+    to: "/settings/providers",
+    searchTerms: ["openrouter api key router models codex claude code opencode test connection"],
+    providerSettingsOnly: true,
+  },
+  {
     id: "usage-providers",
     title: "Usage providers",
     to: "/settings/providers",
