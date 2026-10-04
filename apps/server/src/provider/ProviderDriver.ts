@@ -24,6 +24,7 @@
 import type {
   ProviderConsumeResetCreditOutcome,
   ProviderDriverKind,
+  ProviderInstanceConfig,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
   ServerProvider,
@@ -113,6 +114,8 @@ export function defaultProviderContinuationIdentity(input: {
  */
 export interface ProviderDriverCreateInput<Config> {
   readonly instanceId: ProviderInstanceId;
+  /** Set when an integration such as OpenRouter setup manages this instance. */
+  readonly integration?: ProviderInstanceConfig["integration"];
   readonly displayName: string | undefined;
   readonly accentColor?: string | undefined;
   readonly environment: ProviderInstanceEnvironment;

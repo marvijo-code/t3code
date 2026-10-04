@@ -822,16 +822,19 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         configMap: {
           [openRouterCodex]: {
             driver: codexDriverKind,
+            integration: "openrouter",
             enabled: false,
             config: makeCodexConfig({}),
           },
           [openRouterClaude]: {
             driver: claudeDriverKind,
+            integration: "openrouter",
             enabled: false,
             config: makeClaudeConfig({}),
           },
           [openRouterOpenCode]: {
             driver: openCodeDriverKind,
+            integration: "openrouter",
             enabled: false,
             config: makeOpenCodeConfig({}),
           },

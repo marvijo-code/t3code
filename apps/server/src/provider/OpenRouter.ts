@@ -12,6 +12,7 @@ import {
   type OpenRouterConnectionTestInput,
   type OpenRouterConnectionTestResult,
   type ProviderDriverKind,
+  type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ServerProvider,
   type ServerSettings,
@@ -142,9 +143,14 @@ const UNMANAGED_INSTANCE: OpenRouterInstanceSupport = {
 
 export function instanceSupport(
   service: OpenRouter["Service"],
-  input: { readonly instanceId: ProviderInstanceId; readonly driverKind: ProviderDriverKind },
+  input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly driverKind: ProviderDriverKind;
+    readonly integration: ProviderInstanceConfig["integration"];
+  },
 ): OpenRouterInstanceSupport {
-  if (!isOpenRouterInstance(input.instanceId, input.driverKind)) return UNMANAGED_INSTANCE;
+  const instance = { driver: input.driverKind, integration: input.integration };
+  if (!isOpenRouterInstance(input.instanceId, instance)) return UNMANAGED_INSTANCE;
   return {
     managed: true,
     pending: (draft) =>
@@ -183,7 +189,6 @@ export const make = Effect.gen(function* () {
   let fetchedAtMs: number | null = null;
   let lastAttemptMs: number | null = null;
   const refreshSemaphore = yield* Semaphore.make(1);
-  const configureSemaphore = yield* Semaphore.make(1);
   // One key probe at a time, so the endpoint cannot be used to hammer OpenRouter.
   const testSemaphore = yield* Semaphore.make(1);
 
@@ -228,17 +233,12 @@ export const make = Effect.gen(function* () {
     return catalog;
   });
 
+  // Read and write in one settings transaction: a snapshot taken outside it
+  // would undo any settings change committed in between.
   const configure = (input: OpenRouterConfigureInput) =>
-    configureSemaphore.withPermits(1)(
-      Effect.gen(function* () {
-        // Materialized settings: the key is copied into each managed instance.
-        const current = yield* serverSettings.getSettings;
-        const updated = yield* serverSettings.updateSettings(
-          resolveOpenRouterSettingsPatch(current, input),
-        );
-        return redactServerSettingsForClient(updated);
-      }),
-    );
+    serverSettings
+      .updateSettingsWith((current) => resolveOpenRouterSettingsPatch(current, input))
+      .pipe(Effect.map(redactServerSettingsForClient));
 
   const testConnection = Effect.fn("OpenRouter.testConnection")(function* (
     input: OpenRouterConnectionTestInput,
@@ -286,13 +286,22 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((json) => decodeKeyResponse(json)),
       Effect.option,
     );
-    const data = Option.isSome(key) ? key.value.data : undefined;
+    // A 200 that is not OpenRouter's key record (a captive portal, a proxy page)
+    // proves nothing about the key.
+    if (Option.isNone(key)) {
+      return {
+        status: "error",
+        reason: "unexpected-response",
+        message: "OpenRouter sent a reply this app does not understand. Try again later.",
+      } satisfies OpenRouterConnectionTestResult;
+    }
+    const data = key.value.data;
     return {
       status: "ok",
-      label: data?.label ?? null,
-      usage: data?.usage ?? null,
-      limit: data?.limit ?? null,
-      limitRemaining: data?.limit_remaining ?? null,
+      label: data.label ?? null,
+      usage: data.usage ?? null,
+      limit: data.limit ?? null,
+      limitRemaining: data.limit_remaining ?? null,
     } satisfies OpenRouterConnectionTestResult;
   });
 

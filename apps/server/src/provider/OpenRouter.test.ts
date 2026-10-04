@@ -20,13 +20,30 @@ interface Seen {
   readonly authorization: string | undefined;
 }
 
+/** The secret store, recording the name of every secret written when `writes` is given. */
+const secretStoreLayer = (writes: string[] | undefined) =>
+  writes === undefined
+    ? ServerSecretStore.layer
+    : Layer.effect(
+        ServerSecretStore.ServerSecretStore,
+        Effect.gen(function* () {
+          const store = yield* ServerSecretStore.ServerSecretStore;
+          return {
+            ...store,
+            set: (name: string, value: Uint8Array) =>
+              Effect.sync(() => writes.push(name)).pipe(Effect.andThen(store.set(name, value))),
+          };
+        }),
+      ).pipe(Layer.provide(ServerSecretStore.layer));
+
 const layers = (input: {
   readonly prefix: string;
   readonly respond: (request: Seen) => Response | "network-error";
   readonly seen: Seen[];
+  readonly secretWrites?: string[];
 }) =>
   ServerSettings.layer.pipe(
-    Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provideMerge(secretStoreLayer(input.secretWrites)),
     Layer.provideMerge(Layer.fresh(SqlitePersistenceMemory)),
     Layer.provideMerge(
       Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: input.prefix })),
@@ -196,7 +213,7 @@ describe("OpenRouter configure", () => {
 
   it.effect("tests the key", () => {
     const seen: Seen[] = [];
-    let mode: "ok" | "bad" | "down" = "ok";
+    let mode: "ok" | "bad" | "down" | "not-a-key-record" = "ok";
     return Effect.gen(function* () {
       const service = yield* make;
       assert.deepStrictEqual(yield* service.testConnection({}), {
@@ -225,6 +242,10 @@ describe("OpenRouter configure", () => {
       mode = "down";
       const down = yield* service.testConnection({ apiKey: "sk-or-draft" });
       assert.strictEqual(down.status === "error" && down.reason, "unreachable");
+      // Hostile review finding: a 200 with an unrelated body was reported as connected.
+      mode = "not-a-key-record";
+      const odd = yield* service.testConnection({ apiKey: "sk-or-draft" });
+      assert.strictEqual(odd.status === "error" && odd.reason, "unexpected-response");
     }).pipe(
       Effect.provide(
         layers({
@@ -233,19 +254,157 @@ describe("OpenRouter configure", () => {
           respond: () =>
             mode === "down"
               ? "network-error"
-              : mode === "bad"
-                ? Response.json(
-                    { error: { message: "User not found.", code: 401 } },
-                    { status: 401 },
-                  )
-                : Response.json({
-                    data: {
-                      label: "sk-or-v1-abc...123",
-                      usage: 12.5,
-                      limit: 100,
-                      limit_remaining: 87.5,
-                    },
-                  }),
+              : mode === "not-a-key-record"
+                ? Response.json({ hello: "captive portal" })
+                : mode === "bad"
+                  ? Response.json(
+                      { error: { message: "User not found.", code: 401 } },
+                      { status: 401 },
+                    )
+                  : Response.json({
+                      data: {
+                        label: "sk-or-v1-abc...123",
+                        usage: 12.5,
+                        limit: 100,
+                        limit_remaining: 87.5,
+                      },
+                    }),
+        }),
+      ),
+    );
+  });
+});
+
+describe("OpenRouter hostile review regressions", () => {
+  const codexId = ProviderInstanceId.make("openrouter_codex");
+  const claudeId = ProviderInstanceId.make("openrouter_claude");
+  const userId = ProviderInstanceId.make("personal_codex");
+  const original = {
+    driver: ProviderDriverKind.make("codex"),
+    displayName: "Original name",
+    enabled: true,
+    config: {},
+  };
+
+  it.effect("keeps a settings write that lands while configure is in flight", () => {
+    const seen: Seen[] = [];
+    return Effect.gen(function* () {
+      const real = yield* ServerSettings.ServerSettingsService;
+      yield* real.updateSettings({ providerInstances: { [userId]: original } });
+      // A client rename commits after any snapshot configure could take and
+      // before its write: once after a read, or just before the locked update.
+      let renamed = false;
+      const rename = Effect.suspend(() => {
+        if (renamed) return Effect.void;
+        renamed = true;
+        return real
+          .updateSettings({
+            providerInstances: { [userId]: { ...original, displayName: "Concurrent edit" } },
+          })
+          .pipe(Effect.asVoid);
+      });
+      const proxy: ServerSettings.ServerSettingsService["Service"] = {
+        ...real,
+        getSettings: real.getSettings.pipe(Effect.tap(() => rename)),
+        updateSettingsWith: (derive) =>
+          rename.pipe(Effect.andThen(real.updateSettingsWith(derive))),
+      };
+      const service = yield* make.pipe(
+        Effect.provideService(ServerSettings.ServerSettingsService, proxy),
+      );
+      yield* service.configure({ apiKey: "sk-or-test", harnesses: { codex: true } });
+      const final = yield* real.getSettings;
+      assert.isTrue(renamed);
+      assert.strictEqual(final.providerInstances[userId]?.displayName, "Concurrent edit");
+      assert.strictEqual(final.providerInstances[codexId]?.integration, "openrouter");
+    }).pipe(
+      Effect.provide(
+        layers({ prefix: "openrouter-race-", respond: () => Response.json(MODELS), seen }),
+      ),
+    );
+  });
+
+  it.effect("never takes over a user's own instance under a reserved id", () => {
+    const seen: Seen[] = [];
+    return Effect.gen(function* () {
+      const service = yield* make;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const mine = {
+        driver: ProviderDriverKind.make("codex"),
+        displayName: "My direct Codex",
+        enabled: true,
+        environment: [{ name: "MY_DIRECT_SETTING", value: "unchanged", sensitive: false }],
+        config: {},
+      };
+      // A client cannot claim the reserved id for OpenRouter by sending the marker.
+      yield* serverSettings.updateSettings({
+        providerInstances: { [codexId]: { ...mine, integration: "openrouter" } },
+      });
+      assert.isUndefined(
+        (yield* serverSettings.getSettings).providerInstances[codexId]?.integration,
+      );
+
+      yield* service.configure({ apiKey: "sk-or-test", harnesses: { codex: true } });
+      const after = yield* serverSettings.getSettings;
+      assert.deepStrictEqual(after.providerInstances[codexId], mine);
+
+      // And a client edit of a managed instance keeps the server's marker.
+      yield* service.configure({ harnesses: { claudeAgent: true } });
+      const managed = (yield* serverSettings.getSettings).providerInstances;
+      const { integration: _drop, ...edited } = managed[claudeId]!;
+      yield* serverSettings.updateSettings({
+        providerInstances: { ...managed, [claudeId]: { ...edited, displayName: "Renamed" } },
+      });
+      const renamed = (yield* serverSettings.getSettings).providerInstances[claudeId];
+      assert.strictEqual(renamed?.displayName, "Renamed");
+      assert.strictEqual(renamed?.integration, "openrouter");
+    }).pipe(
+      Effect.provide(
+        layers({ prefix: "openrouter-ownership-", respond: () => Response.json(MODELS), seen }),
+      ),
+    );
+  });
+
+  it.effect("switching a harness does not rewrite unchanged secrets", () => {
+    const seen: Seen[] = [];
+    const secretWrites: string[] = [];
+    return Effect.gen(function* () {
+      const service = yield* make;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [userId]: {
+            ...original,
+            environment: [{ name: "MY_SECRET", value: "user-secret", sensitive: true }],
+          },
+        },
+      });
+      yield* service.configure({ apiKey: "sk-or-test", harnesses: { codex: true } });
+      secretWrites.length = 0;
+
+      yield* service.configure({ harnesses: { claudeAgent: true } });
+      const claudePrefix = `provider-env-${Buffer.from(claudeId, "utf8").toString("base64url")}-`;
+      assert.isAbove(secretWrites.length, 0);
+      assert.deepStrictEqual(
+        secretWrites.filter((name) => !name.startsWith(claudePrefix)),
+        [],
+      );
+      const materialized = yield* serverSettings.getSettings;
+      assert.strictEqual(
+        materialized.providerInstances[userId]?.environment?.[0]?.value,
+        "user-secret",
+      );
+      assert.strictEqual(
+        materialized.providerInstances[codexId]?.environment?.[0]?.value,
+        "sk-or-test",
+      );
+    }).pipe(
+      Effect.provide(
+        layers({
+          prefix: "openrouter-secret-writes-",
+          respond: () => Response.json(MODELS),
+          seen,
+          secretWrites,
         }),
       ),
     );

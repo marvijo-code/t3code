@@ -811,6 +811,37 @@ describe("instance-scoped model selection", () => {
     });
   });
 
+  // Hostile review finding: with an empty OpenRouter catalog the selection fell
+  // back to the driver's native default, a model OpenRouter never listed.
+  it("leaves an OpenRouter instance with an empty catalog without a model", () => {
+    const instanceId = ProviderInstanceId.make("openrouter_codex");
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [instanceId]: { driver: ProviderDriverKind.make("codex"), integration: "openrouter" },
+      },
+      textGenerationModelSelection: { instanceId, model: "" },
+    };
+    const selection = resolveAppModelSelectionState(settings, [
+      provider({ instanceId: instanceId }),
+    ]);
+    expect(selection.instanceId).toBe(instanceId);
+    expect(selection.model).toBe("");
+  });
+
+  it("still falls back to the native default for an ordinary empty custom instance", () => {
+    const instanceId = ProviderInstanceId.make("codex_work");
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: { [instanceId]: { driver: ProviderDriverKind.make("codex") } },
+      textGenerationModelSelection: { instanceId, model: "" },
+    };
+    const selection = resolveAppModelSelectionState(settings, [
+      provider({ instanceId: instanceId }),
+    ]);
+    expect(selection.model).not.toBe("");
+  });
+
   it("does not select a provider that cannot generate system text", () => {
     const instanceId = ProviderInstanceId.make("antigravity");
     const unsupported = {

@@ -1386,12 +1386,17 @@ it.layer(NodeServices.layer)("server settings", (it) => {
           (variable) => variable.name === "OPENROUTER_API_KEY",
         )?.value;
 
-      yield* serverSettings.updateSettings({
+      // Only the server creates managed instances (with the integration marker).
+      yield* serverSettings.updateSettingsWith(() => ({
         openRouter: { apiKey: "sk-or-one" },
         providerInstances: {
-          [codexId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+          [codexId]: {
+            driver: ProviderDriverKind.make("codex"),
+            integration: "openrouter",
+            enabled: true,
+          },
         },
-      });
+      }));
       assert.equal(keyOf(yield* serverSettings.getSettings), "sk-or-one");
 
       yield* serverSettings.updateSettings({ openRouter: { apiKey: "sk-or-two" } });
@@ -1403,6 +1408,22 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       const cleared = yield* serverSettings.getSettings;
       assert.isUndefined(keyOf(cleared));
       assert.equal(cleared.providerInstances[codexId]?.enabled, false);
+    }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
+  );
+
+  it.effect("never writes the OpenRouter key into a user's own instance under a reserved id", () =>
+    Effect.gen(function* () {
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      const codexId = ProviderInstanceId.make("openrouter_codex");
+      yield* serverSettings.updateSettings({
+        openRouter: { apiKey: "sk-or-one" },
+        providerInstances: {
+          [codexId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+        },
+      });
+      const settings = yield* serverSettings.getSettings;
+      assert.isUndefined(settings.providerInstances[codexId]?.environment);
+      assert.isUndefined(settings.providerInstances[codexId]?.integration);
     }).pipe(Effect.provide(makeServerSettingsLayerWithSecrets())),
   );
 

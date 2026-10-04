@@ -7,8 +7,9 @@ export type OpenRouterHarness = typeof OpenRouterHarness.Type;
 
 /**
  * The provider instances OpenRouter setup owns, one per harness. The instance id is reserved:
- * an instance with this id and driver gets OpenRouter's model catalog and is what the settings
- * switch turns on and off. `harness` equals the driver kind.
+ * an instance with this id, driver and the `integration: "openrouter"` marker gets OpenRouter's
+ * model catalog and is what the settings switch turns on and off. An instance a user created
+ * under the same id has no marker and is never changed. `harness` equals the driver kind.
  */
 export const OPENROUTER_HARNESSES = [
   {
@@ -40,8 +41,14 @@ export const OPENROUTER_HARNESSES = [
   readonly displayName: string;
 }>;
 
-export const isOpenRouterInstance = (instanceId: string, driver: string): boolean =>
-  OPENROUTER_HARNESSES.some((entry) => entry.instanceId === instanceId && entry.driver === driver);
+export const isOpenRouterInstance = (
+  instanceId: string,
+  instance: { readonly driver: string; readonly integration?: string | undefined } | undefined,
+): boolean =>
+  instance?.integration === "openrouter" &&
+  OPENROUTER_HARNESSES.some(
+    (entry) => entry.instanceId === instanceId && entry.driver === instance.driver,
+  );
 
 export const OpenRouterConfigureInput = Schema.Struct({
   /** New key. Empty removes the key and turns every harness off. Omitted keeps the saved key. */
@@ -74,7 +81,7 @@ export const OpenRouterConnectionTestResult = Schema.Union([
   }),
   Schema.Struct({
     status: Schema.Literal("error"),
-    reason: Schema.Literals(["missing-key", "invalid-key", "unreachable"]),
+    reason: Schema.Literals(["missing-key", "invalid-key", "unreachable", "unexpected-response"]),
     message: Schema.String,
   }),
 ]);

@@ -1,4 +1,5 @@
 import {
+  isOpenRouterInstance,
   OPENROUTER_HARNESSES,
   resolveProviderInstanceEnabled,
   type OpenRouterConnectionTestResult,
@@ -14,14 +15,15 @@ export function readOpenRouterState(
     keySaved: settings.openRouter.apiKey.length > 0,
     harnesses: OPENROUTER_HARNESSES.map((entry) => {
       const instance = settings.providerInstances[entry.instanceId];
+      const managed = isOpenRouterInstance(entry.instanceId, instance);
       return {
         harness: entry.harness,
+        instanceId: entry.instanceId,
         label: entry.label,
         displayName: entry.displayName,
-        enabled:
-          instance !== undefined &&
-          instance.driver === entry.driver &&
-          resolveProviderInstanceEnabled(instance),
+        enabled: managed && instance !== undefined && resolveProviderInstanceEnabled(instance),
+        // The user's own instance holds the reserved id; OpenRouter setup never changes it.
+        reservedIdInUse: instance !== undefined && !managed,
       };
     }),
   };

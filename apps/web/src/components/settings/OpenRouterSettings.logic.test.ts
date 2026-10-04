@@ -21,10 +21,12 @@ describe("readOpenRouterState", () => {
         providerInstances: {
           [ProviderInstanceId.make("openrouter_codex")]: {
             driver: ProviderDriverKind.make("codex"),
+            integration: "openrouter",
             enabled: true,
           },
           [ProviderInstanceId.make("openrouter_claude")]: {
             driver: ProviderDriverKind.make("claudeAgent"),
+            integration: "openrouter",
             enabled: false,
           },
           [ProviderInstanceId.make("openrouter_opencode")]: {
@@ -40,7 +42,23 @@ describe("readOpenRouterState", () => {
       ["Claude Code", false],
       ["OpenCode", false],
     ]);
+    expect(state.harnesses.map((entry) => entry.reservedIdInUse)).toEqual([false, false, true]);
     expect(readOpenRouterState(DEFAULT_SERVER_SETTINGS).keySaved).toBe(false);
+  });
+
+  it("shows a user's own same-driver instance under a reserved id as off and in use", () => {
+    const state = readOpenRouterState(
+      settings({
+        openRouter: { apiKey: "marker" },
+        providerInstances: {
+          [ProviderInstanceId.make("openrouter_codex")]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+          },
+        },
+      }),
+    );
+    expect(state.harnesses[0]).toMatchObject({ enabled: false, reservedIdInUse: true });
   });
 });
 

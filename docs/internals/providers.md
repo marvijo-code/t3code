@@ -39,18 +39,29 @@ and removal must respect those leases instead of replacing executables under a r
 
 OpenRouter setup does not add a driver. Each harness gets an ordinary provider instance under a
 reserved id, listed in the [contract](../../packages/contracts/src/openRouter.ts), whose environment
-and launch arguments route the harness to OpenRouter. Terminals, usage scanning, and session import
+and launch arguments route the harness to OpenRouter. The server marks these instances with
+`integration: "openrouter"`. Only a marked instance is treated as OpenRouter's: a user's own
+instance that already uses a reserved id is never changed, and a client settings patch can neither
+add nor remove the marker. Terminals, usage scanning, and session import
 read instance environments straight from settings, so deriving these instances at spawn time would
 hide them from those readers.
 
-Each instance carries its own copy of the key, and `updateSettings` is the single writer that keeps
-those copies in step with `openRouter.apiKey`: any patch that sets the key rewrites the instances,
-so `server.configureOpenRouter` and a plain settings patch cannot disagree. See the
-[instance builder](../../apps/server/src/provider/openRouterInstances.ts).
+Each instance carries its own copy of the key, and the settings service is the single writer that
+keeps those copies in step with `openRouter.apiKey`: any patch that sets the key rewrites the
+instances, so `server.configureOpenRouter` and a plain settings patch cannot disagree.
+`server.configureOpenRouter` derives its patch inside the settings write lock
+(`updateSettingsWith`), so a settings change committed at the same time is never overwritten by a
+stale snapshot, and instances it did not change keep their stored secrets instead of being written
+again. See the [instance builder](../../apps/server/src/provider/openRouterInstances.ts).
 
 A managed Codex instance keeps its routing in its launch arguments. `T3CODE_CODEX_LAUNCH_ARGS`
 normally replaces instance launch arguments, so the Codex driver folds that override into the
-managed instance's arguments instead of letting it drop the routing.
+managed instance's arguments. Codex applies `-c` overrides in order, so any `model_provider` or
+`model_providers.openrouter.*` override in those arguments is dropped and the routing goes last.
+
+A managed Claude Code instance also clears `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`,
+`CLAUDE_CODE_USE_FOUNDRY` and `CLAUDE_CODE_OAUTH_TOKEN` for its own process, so a machine-wide
+setting cannot send its traffic to another backend.
 
 A driver treats a reserved id as OpenRouter in two ways. It replaces the snapshot's model list with
 the OpenRouter catalog, on the pending snapshot too, because the registry retains missing models for
@@ -58,7 +69,9 @@ some drivers. And it suffixes the Codex and Claude continuation keys, which othe
 directory these instances share with the direct ones, so a thread cannot resume across backends.
 
 The catalog is fetched only while an enabled OpenRouter instance is probed. An environment that
-never sets OpenRouter up must not contact it. See the [service](../../apps/server/src/provider/OpenRouter.ts).
+never sets OpenRouter up must not contact it. When the catalog is empty, the client leaves an
+OpenRouter instance's model selection empty instead of falling back to the driver's native default,
+which OpenRouter does not list. See the [service](../../apps/server/src/provider/OpenRouter.ts).
 
 ## Setup must not happen as a health-check side effect
 

@@ -113,7 +113,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
   },
   configSchema: ClaudeSettings,
   defaultConfig: (): ClaudeSettings => decodeClaudeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({ instanceId, integration, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -148,6 +148,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const openRouter = OpenRouter.instanceSupport(yield* OpenRouter.OpenRouter, {
         instanceId,
         driverKind: DRIVER_KIND,
+        integration,
       });
       const continuationGroupKey = openRouter.continuationKey(
         yield* makeClaudeContinuationGroupKey(effectiveConfig, processEnv),

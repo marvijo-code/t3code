@@ -176,6 +176,7 @@ const buildEntry = <R>(input: {
     const createResult = yield* driver
       .create({
         instanceId,
+        integration: entry.integration,
         displayName: entry.displayName,
         accentColor: entry.accentColor,
         environment: entry.environment ?? [],

@@ -8,10 +8,13 @@ import {
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
+import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
+
 import {
   applyOpenRouterCatalog,
   ensureOpenRouterCodexLaunchArgs,
   OPENROUTER_CODEX_LAUNCH_ARGS,
+  preserveIntegrationMarkers,
   resolveOpenRouterSettingsPatch,
 } from "./openRouterInstances.ts";
 
@@ -31,7 +34,7 @@ const apply = (
   const patch = resolveOpenRouterSettingsPatch(current, input);
   return settings({
     ...current,
-    openRouter: { apiKey: patch.openRouter?.apiKey ?? "" },
+    openRouter: { apiKey: patch.openRouter?.apiKey ?? current.openRouter.apiKey },
     providerInstances: patch.providerInstances as ServerSettings["providerInstances"],
   });
 };
@@ -44,6 +47,7 @@ describe("resolveOpenRouterSettingsPatch", () => {
     });
     expect(next.providerInstances[codexId]).toEqual({
       driver: "codex",
+      integration: "openrouter",
       displayName: "OpenRouter (Codex)",
       enabled: true,
       environment: [{ name: "OPENROUTER_API_KEY", value: "sk-or-test", sensitive: true }],
@@ -51,17 +55,23 @@ describe("resolveOpenRouterSettingsPatch", () => {
     });
     expect(next.providerInstances[claudeId]).toEqual({
       driver: "claudeAgent",
+      integration: "openrouter",
       displayName: "OpenRouter (Claude Code)",
       enabled: true,
       environment: [
         { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
         { name: "ANTHROPIC_AUTH_TOKEN", value: "sk-or-test", sensitive: true },
         { name: "ANTHROPIC_API_KEY", value: "", sensitive: false },
+        { name: "CLAUDE_CODE_USE_BEDROCK", value: "", sensitive: false },
+        { name: "CLAUDE_CODE_USE_VERTEX", value: "", sensitive: false },
+        { name: "CLAUDE_CODE_USE_FOUNDRY", value: "", sensitive: false },
+        { name: "CLAUDE_CODE_OAUTH_TOKEN", value: "", sensitive: false },
       ],
       config: {},
     });
     expect(next.providerInstances[openCodeId]).toEqual({
       driver: "opencode",
+      integration: "openrouter",
       displayName: "OpenRouter (OpenCode)",
       enabled: true,
       environment: [{ name: "OPENROUTER_API_KEY", value: "sk-or-test", sensitive: true }],
@@ -104,7 +114,7 @@ describe("resolveOpenRouterSettingsPatch", () => {
       { name: "OPENROUTER_API_KEY", value: "sk-or-next", sensitive: true },
     ]);
     expect(codex.config).toEqual({
-      launchArgs: `${OPENROUTER_CODEX_LAUNCH_ARGS} --enable foo`,
+      launchArgs: `--enable foo ${OPENROUTER_CODEX_LAUNCH_ARGS}`,
       customModels: ["vendor/custom"],
     });
     expect(apply(rotated, { harnesses: { codex: true } }).providerInstances[codexId]).toEqual(
@@ -139,6 +149,70 @@ describe("resolveOpenRouterSettingsPatch", () => {
     });
     expect(next.providerInstances[codexId]).toBe(foreign);
   });
+
+  // Hostile review finding: a user's own same-driver instance under a reserved
+  // id was rewritten with the key and OpenRouter routing on the next key save.
+  it("never takes over a user's same-driver instance under a reserved id", () => {
+    const mine = {
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "My direct Codex",
+      enabled: true,
+      environment: [{ name: "MY_DIRECT_SETTING", value: "unchanged", sensitive: false }],
+      config: {},
+    };
+    const current = settings({ providerInstances: { [codexId]: mine } });
+    expect(apply(current, { apiKey: "sk-or-test" }).providerInstances[codexId]).toBe(mine);
+    expect(
+      apply(current, { apiKey: "sk-or-test", harnesses: { codex: true } }).providerInstances[
+        codexId
+      ],
+    ).toBe(mine);
+  });
+
+  it("does not resend an unchanged key", () => {
+    const on = apply(settings(), { apiKey: "sk-or-test", harnesses: { codex: true } });
+    expect(resolveOpenRouterSettingsPatch(on, { harnesses: { codex: false } }).openRouter).toBe(
+      undefined,
+    );
+  });
+});
+
+describe("preserveIntegrationMarkers", () => {
+  const managed = {
+    driver: ProviderDriverKind.make("codex"),
+    integration: "openrouter" as const,
+    enabled: true,
+  };
+  const mine = { driver: ProviderDriverKind.make("codex"), enabled: true };
+
+  it("ignores a marker a client tries to add", () => {
+    const current = settings({ providerInstances: { [codexId]: mine } });
+    const next = preserveIntegrationMarkers(
+      current,
+      settings({ providerInstances: { [codexId]: { ...mine, integration: "openrouter" } } }),
+    );
+    expect(next.providerInstances[codexId]).toEqual(mine);
+  });
+
+  it("keeps the marker when a client edits a managed instance without it", () => {
+    const current = settings({ providerInstances: { [codexId]: managed } });
+    const { integration: _drop, ...edited } = { ...managed, displayName: "Renamed" };
+    const next = preserveIntegrationMarkers(
+      current,
+      settings({ providerInstances: { [codexId]: edited } }),
+    );
+    expect(next.providerInstances[codexId]).toEqual({ ...edited, integration: "openrouter" });
+  });
+
+  it("drops the marker when the driver changes", () => {
+    const current = settings({ providerInstances: { [codexId]: managed } });
+    const swapped = { ...managed, driver: ProviderDriverKind.make("claudeAgent") };
+    const next = preserveIntegrationMarkers(
+      current,
+      settings({ providerInstances: { [codexId]: swapped } }),
+    );
+    expect(next.providerInstances[codexId]?.integration).toBeUndefined();
+  });
 });
 
 const model = (overrides: Partial<ServerProviderModel>): ServerProviderModel => ({
@@ -166,11 +240,26 @@ const CATALOG = [
 ];
 
 describe("ensureOpenRouterCodexLaunchArgs", () => {
-  it("adds only the routing tokens that are missing", () => {
+  /** The value Codex ends up with for one `-c` key: the last override wins. */
+  const effective = (launchArgs: string, key: string) => {
+    const args = tokenizeCliArgs(launchArgs);
+    let value: string | undefined;
+    for (let index = 0; index < args.length; index++) {
+      const arg = args[index]!;
+      const config =
+        arg === "-c" || arg === "--config"
+          ? args[++index]
+          : /^(?:-c|--config)=(.*)$/.exec(arg)?.[1];
+      if (config?.startsWith(`${key}=`)) value = config.slice(key.length + 1);
+    }
+    return value;
+  };
+
+  it("adds every routing token exactly once and is idempotent", () => {
     expect(ensureOpenRouterCodexLaunchArgs(undefined)).toBe(OPENROUTER_CODEX_LAUNCH_ARGS);
-    expect(ensureOpenRouterCodexLaunchArgs(`${OPENROUTER_CODEX_LAUNCH_ARGS} --enable foo`)).toBe(
-      `${OPENROUTER_CODEX_LAUNCH_ARGS} --enable foo`,
-    );
+    const once = ensureOpenRouterCodexLaunchArgs("--enable foo");
+    expect(once).toBe(`--enable foo ${OPENROUTER_CODEX_LAUNCH_ARGS}`);
+    expect(ensureOpenRouterCodexLaunchArgs(once)).toBe(once);
     const withoutFirst = OPENROUTER_CODEX_LAUNCH_ARGS.replace(
       `-c 'model_provider="openrouter"' `,
       "",
@@ -180,10 +269,36 @@ describe("ensureOpenRouterCodexLaunchArgs", () => {
     expect(repaired).toContain(`-c 'model_provider="openrouter"'`);
   });
 
-  it("puts the routing in front of an operator override", () => {
-    expect(ensureOpenRouterCodexLaunchArgs("--enable bar")).toBe(
-      `${OPENROUTER_CODEX_LAUNCH_ARGS} --enable bar`,
+  // Hostile review finding: T3CODE_CODEX_LAUNCH_ARGS='-c model_provider="openai"'
+  // was kept after the routing, so Codex selected openai, not openrouter.
+  it("drops conflicting routing overrides in every spelling", () => {
+    for (const override of [
+      `-c 'model_provider="openai"'`,
+      `-c model_provider=openai`,
+      `--config 'model_provider="openai"'`,
+      `--config=model_provider=openai`,
+      `-c='model_provider="openai"'`,
+      `-c 'model_providers.openrouter.base_url="https://example.invalid"'`,
+    ]) {
+      const args = ensureOpenRouterCodexLaunchArgs(`${override} --enable bar`);
+      expect(effective(args, "model_provider")).toBe('"openrouter"');
+      expect(effective(args, "model_providers.openrouter.base_url")).toBe(
+        '"https://openrouter.ai/api/v1"',
+      );
+      expect(args).not.toContain("example.invalid");
+      expect(args).toContain("--enable bar");
+    }
+  });
+
+  it("keeps unrelated config overrides and their quoting", () => {
+    const args = ensureOpenRouterCodexLaunchArgs(
+      `-c 'model_reasoning_effort="high"' --strict-config`,
     );
+    expect(tokenizeCliArgs(args).slice(0, 3)).toEqual([
+      "-c",
+      'model_reasoning_effort="high"',
+      "--strict-config",
+    ]);
   });
 });
 

@@ -3,6 +3,7 @@ import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
+  isOpenRouterInstance,
   type ModelSelection,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -415,6 +416,14 @@ export function resolveAppModelSelectionState(
     // When the instance changed due to fallback (e.g. selected instance was disabled),
     // don't carry over the old instance's model — use the fallback instance's default.
     const selectedModel = selectedEntry ? selection.model : null;
+    // An OpenRouter instance lists only OpenRouter's catalog. The driver's native default
+    // is not in it, so with an empty catalog the selection stays empty instead.
+    const nativeDefault = isOpenRouterInstance(
+      entry.instanceId,
+      settings.providerInstances[entry.instanceId],
+    )
+      ? undefined
+      : DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind];
     const model =
       resolveAppModelSelectionForInstance(
         entry.instanceId,
@@ -423,7 +432,7 @@ export function resolveAppModelSelectionState(
         selectedModel,
       ) ??
       entry.models[0]?.slug ??
-      DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[entry.driverKind];
+      nativeDefault;
     if (!model) {
       return createModelSelection(entry.instanceId, "", []);
     }

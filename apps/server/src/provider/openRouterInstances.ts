@@ -6,6 +6,7 @@
  * saved key and shapes their snapshots; it has no services.
  */
 import {
+  isOpenRouterInstance,
   OPENROUTER_HARNESSES,
   resolveProviderInstanceEnabled,
   type OpenRouterConfigureInput,
@@ -18,13 +19,14 @@ import {
   type ServerSettings,
   type ServerSettingsPatch,
 } from "@t3tools/contracts";
+import { tokenizeCliArgs } from "@t3tools/shared/cliArgs";
 
 export interface OpenRouterCatalogModel {
   readonly id: string;
   readonly name: string;
 }
 
-const OPENROUTER_CODEX_LAUNCH_TOKENS = [
+const OPENROUTER_CODEX_CONFIG = [
   'model_provider="openrouter"',
   'model_providers.openrouter.name="OpenRouter"',
   'model_providers.openrouter.base_url="https://openrouter.ai/api/v1"',
@@ -32,9 +34,24 @@ const OPENROUTER_CODEX_LAUNCH_TOKENS = [
   'model_providers.openrouter.wire_api="responses"',
   "model_providers.openrouter.requires_openai_auth=false",
   "model_providers.openrouter.supports_websockets=false",
-].map((value) => `-c '${value}'`);
+];
 
-export const OPENROUTER_CODEX_LAUNCH_ARGS = OPENROUTER_CODEX_LAUNCH_TOKENS.join(" ");
+export const OPENROUTER_CODEX_LAUNCH_ARGS = OPENROUTER_CODEX_CONFIG.map(
+  (value) => `-c '${value}'`,
+).join(" ");
+
+/**
+ * Settings that would undo OpenRouter routing for Claude Code if a user set
+ * them for the whole machine: another cloud backend, or a subscription login
+ * that outranks ANTHROPIC_AUTH_TOKEN. Empty values switch them off for this
+ * instance only.
+ */
+const COMPETING_CLAUDE_VARIABLES = [
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+];
 
 type OpenRouterHarnessDefinition = (typeof OPENROUTER_HARNESSES)[number];
 
@@ -47,6 +64,7 @@ const managedEnvironment = (
         { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
         { name: "ANTHROPIC_AUTH_TOKEN", value: apiKey, sensitive: true },
         { name: "ANTHROPIC_API_KEY", value: "", sensitive: false },
+        ...COMPETING_CLAUDE_VARIABLES.map((name) => ({ name, value: "", sensitive: false })),
       ]
     : [{ name: "OPENROUTER_API_KEY", value: apiKey, sensitive: true }];
 
@@ -55,14 +73,44 @@ const readConfigObject = (config: unknown): Record<string, unknown> =>
     ? (config as Record<string, unknown>)
     : {};
 
+const CODEX_CONFIG_FLAGS = new Set(["-c", "--config"]);
+
+/** A `-c` value this module owns: the provider choice and the openrouter provider table. */
+const isRoutingConfig = (value: string): boolean => {
+  const separator = value.indexOf("=");
+  const key = (separator < 0 ? value : value.slice(0, separator)).trim();
+  return key === "model_provider" || key.startsWith("model_providers.openrouter");
+};
+
+/** Quotes one argument so `tokenizeCliArgs` reads it back unchanged. */
+const quoteCliArg = (arg: string): string => {
+  if (/^[\w@%+=:,./-]+$/.test(arg)) return arg;
+  if (!arg.includes("'")) return `'${arg}'`;
+  return `"${arg.replace(/["\\$`]/g, "\\$&")}"`;
+};
+
 /**
- * Launch args with every OpenRouter routing token present. Checked per token,
- * so a user who edits one token gets it back without the rest duplicating.
+ * Launch args that always route through OpenRouter. Codex applies `-c`
+ * overrides in order, so any routing override the user or operator passed
+ * (for example `-c model_provider="openai"`) is dropped and OpenRouter's
+ * settings go last. Every other argument is kept in place.
  */
 export const ensureOpenRouterCodexLaunchArgs = (launchArgs: string | undefined): string => {
-  const existing = launchArgs?.trim() ?? "";
-  const missing = OPENROUTER_CODEX_LAUNCH_TOKENS.filter((token) => !existing.includes(token));
-  return [...missing, existing].filter((part) => part.length > 0).join(" ");
+  const args = tokenizeCliArgs(launchArgs);
+  const kept: string[] = [];
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
+    if (CODEX_CONFIG_FLAGS.has(arg) && index + 1 < args.length) {
+      const value = args[index + 1]!;
+      index++;
+      if (!isRoutingConfig(value)) kept.push(arg, value);
+      continue;
+    }
+    const inline = /^(?:-c|--config)=([\s\S]*)$/.exec(arg);
+    if (inline && isRoutingConfig(inline[1]!)) continue;
+    kept.push(arg);
+  }
+  return [...kept.map(quoteCliArg), OPENROUTER_CODEX_LAUNCH_ARGS].join(" ");
 };
 
 const withCodexLaunchArgs = (config: Record<string, unknown>): Record<string, unknown> => ({
@@ -81,16 +129,30 @@ function buildInstance(input: {
   const { harness, existing, apiKey, enabled } = input;
   const managed = managedEnvironment(harness.harness, apiKey);
   const managedNames = new Set(managed.map((variable) => variable.name));
+  const previous = new Map(
+    (existing?.environment ?? []).map((variable) => [variable.name, variable]),
+  );
+  // An unchanged variable stays the same entry, so the settings service sees no
+  // change and leaves its stored secret alone instead of writing it again.
+  const keepUnchanged = (variable: ProviderInstanceEnvironmentVariable) => {
+    const before = previous.get(variable.name);
+    return before !== undefined &&
+      before.value === variable.value &&
+      before.sensitive === variable.sensitive
+      ? before
+      : variable;
+  };
   const config = readConfigObject(existing?.config);
   return {
     driver: harness.driver,
+    integration: "openrouter",
     displayName: existing?.displayName ?? harness.displayName,
     ...(existing?.accentColor ? { accentColor: existing.accentColor } : {}),
     enabled,
     environment: [
       ...(existing?.environment ?? []).filter((variable) => !managedNames.has(variable.name)),
       // Without a key no copy of it may stay behind; the plain variables are harmless.
-      ...managed.filter((variable) => apiKey.length > 0 || !variable.sensitive),
+      ...managed.filter((variable) => apiKey.length > 0 || !variable.sensitive).map(keepUnchanged),
     ],
     config: harness.harness === "codex" ? withCodexLaunchArgs(config) : config,
   };
@@ -100,6 +162,10 @@ function buildInstance(input: {
  * The settings patch for one `server.configureOpenRouter` call. `current`
  * must be materialized settings (secrets in the clear): the key is copied
  * into each managed instance's environment.
+ *
+ * Only instances OpenRouter setup created are changed. A user's own instance
+ * that already holds a reserved id (any driver, no `integration` marker) is
+ * left exactly as it is, and that harness stays unavailable until it is renamed.
  */
 export function resolveOpenRouterSettingsPatch(
   current: ServerSettings,
@@ -111,17 +177,43 @@ export function resolveOpenRouterSettingsPatch(
   };
   for (const harness of OPENROUTER_HARNESSES) {
     const existing = current.providerInstances[harness.instanceId];
-    // The reserved id holds someone else's instance: never touch it.
-    if (existing !== undefined && existing.driver !== harness.driver) continue;
+    if (existing !== undefined && !isOpenRouterInstance(harness.instanceId, existing)) continue;
     const wasEnabled = existing !== undefined && resolveProviderInstanceEnabled(existing);
     const enabled = apiKey.length > 0 && (input.harnesses?.[harness.harness] ?? wasEnabled);
     if (existing === undefined && !enabled) continue;
     providerInstances[harness.instanceId] = buildInstance({ harness, existing, apiKey, enabled });
   }
   return {
-    openRouter: { apiKey },
+    // An unchanged key is not sent back, so the secret store is not rewritten.
+    ...(input.apiKey === undefined ? {} : { openRouter: { apiKey } }),
     providerInstances: providerInstances as ServerSettings["providerInstances"],
   };
+}
+
+/**
+ * Keeps the server in charge of the `integration` marker: a settings patch
+ * from a client can neither claim an instance for OpenRouter nor drop the
+ * marker from one it manages (as long as the driver is unchanged).
+ */
+export function preserveIntegrationMarkers(
+  current: Pick<ServerSettings, "providerInstances">,
+  next: ServerSettings,
+): ServerSettings {
+  let changed = false;
+  const providerInstances: Record<string, ProviderInstanceConfig> = { ...next.providerInstances };
+  for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
+    const previous = (current.providerInstances as Record<string, ProviderInstanceConfig>)[
+      instanceId
+    ];
+    const owned = previous?.driver === instance.driver ? previous.integration : undefined;
+    if (instance.integration === owned) continue;
+    changed = true;
+    const { integration: _ignored, ...rest } = instance;
+    providerInstances[instanceId] = owned === undefined ? rest : { ...rest, integration: owned };
+  }
+  return changed
+    ? { ...next, providerInstances: providerInstances as ServerSettings["providerInstances"] }
+    : next;
 }
 
 const PREFERRED_VENDOR: Partial<Record<string, string>> = {

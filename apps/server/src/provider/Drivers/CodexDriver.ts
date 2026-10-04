@@ -131,7 +131,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   },
   configSchema: CodexSettings,
   defaultConfig: (): CodexSettings => decodeCodexSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({ instanceId, integration, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       if (config.setupMode === "managed")
         return yield* makeManagedCodexProvider({
@@ -154,6 +154,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const openRouter = OpenRouter.instanceSupport(yield* OpenRouter.OpenRouter, {
         instanceId,
         driverKind: DRIVER_KIND,
+        integration,
       });
       // T3CODE_CODEX_LAUNCH_ARGS outranks the instance's launch args, which would
       // silently drop the OpenRouter routing and send the model slug to OpenAI.

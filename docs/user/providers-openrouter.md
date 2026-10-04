@@ -20,6 +20,10 @@ picker. The harness itself still has to be installed on that machine; see
 Turning a switch off disables that provider and keeps its threads. **Remove key**
 turns all three off and deletes the stored key.
 
+If you already have your own provider named `openrouter_codex`, `openrouter_claude`,
+or `openrouter_opencode`, OpenRouter setup leaves it alone and that switch stays
+unavailable. Rename your provider to use the switch.
+
 ## Models
 
 The model list comes from OpenRouter and refreshes about once an hour. Use
@@ -42,7 +46,9 @@ Providers** and add its full OpenRouter ID with **Add custom model**.
   instead.
 - Claude Code shares your `~/.claude` configuration, so a cached claude.ai login can take
   priority over the OpenRouter key. If Claude Code does not use OpenRouter, run
-  `/logout` in Claude Code once and try again.
+  `/logout` in Claude Code once and try again. Bedrock, Vertex, Foundry and
+  `CLAUDE_CODE_OAUTH_TOKEN` settings from your shell are switched off for the
+  OpenRouter provider only.
 - Usage is billed by OpenRouter. Check spend in OpenRouter's activity page.
 - You can rename an OpenRouter provider or add environment variables to it like any
   other provider. Saving a new key updates all three.

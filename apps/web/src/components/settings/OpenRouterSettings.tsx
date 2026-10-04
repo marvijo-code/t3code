@@ -181,12 +181,16 @@ export function OpenRouterSettings({
         <SettingsRow
           key={entry.harness}
           title={entry.label}
-          description={`Adds the ${entry.displayName} provider, with OpenRouter's models.`}
+          description={
+            entry.reservedIdInUse
+              ? `Unavailable: your provider instance "${entry.instanceId}" already uses this id. Rename it to add ${entry.displayName}.`
+              : `Adds the ${entry.displayName} provider, with OpenRouter's models.`
+          }
           control={
             <Switch
               aria-label={`Use OpenRouter for ${entry.label}`}
               checked={pending?.harness === entry.harness ? pending.enabled : entry.enabled}
-              disabled={readOnly || busy || !state.keySaved}
+              disabled={readOnly || busy || !state.keySaved || entry.reservedIdInUse}
               onCheckedChange={(enabled) => toggle(entry.harness, enabled)}
             />
           }

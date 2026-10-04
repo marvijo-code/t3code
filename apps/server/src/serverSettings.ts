@@ -57,7 +57,10 @@ import {
   isModelSelectionProviderEnabled,
 } from "@t3tools/shared/serverSettings";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
-import { resolveOpenRouterSettingsPatch } from "./provider/openRouterInstances.ts";
+import {
+  preserveIntegrationMarkers,
+  resolveOpenRouterSettingsPatch,
+} from "./provider/openRouterInstances.ts";
 
 export { resolveSourceControlWriterModelSelection } from "@t3tools/shared/serverSettings";
 
@@ -225,6 +228,16 @@ export class ServerSettingsService extends Context.Service<
       patch: ServerSettingsPatch,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
 
+    /**
+     * Server-side read-modify-write: `derive` gets the current settings (secrets in
+     * the clear) and returns the patch, all under the same lock as `updateSettings`,
+     * so a concurrent write can never be overwritten by a stale snapshot. Unlike
+     * `updateSettings`, the patch may set the `integration` marker on instances.
+     */
+    readonly updateSettingsWith: (
+      derive: (current: ServerSettings) => ServerSettingsPatch,
+    ) => Effect.Effect<ServerSettings, ServerSettingsError>;
+
     /** Stream of settings change events. */
     readonly streamChanges: Stream.Stream<ServerSettings>;
 
@@ -255,18 +268,26 @@ const makeTest = (overrides: DeepPartial<ServerSettings> = {}) =>
         : {}),
     });
     const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+    const update = (
+      derive: (current: ServerSettings) => ServerSettingsPatch,
+      fromClient: boolean,
+    ) =>
+      Ref.get(currentSettingsRef).pipe(
+        Effect.map((currentSettings) => {
+          const patched = applyServerSettingsPatch(currentSettings, derive(currentSettings));
+          return fromClient ? preserveIntegrationMarkers(currentSettings, patched) : patched;
+        }),
+        Effect.flatMap(normalizeServerSettings),
+        Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+        Effect.map(resolveTextGenerationProvider),
+      );
 
     return {
       start: Effect.void,
       ready: Effect.void,
       getSettings: Ref.get(currentSettingsRef).pipe(Effect.map(resolveTextGenerationProvider)),
-      updateSettings: (patch) =>
-        Ref.get(currentSettingsRef).pipe(
-          Effect.map((currentSettings) => applyServerSettingsPatch(currentSettings, patch)),
-          Effect.flatMap(normalizeServerSettings),
-          Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-          Effect.map(resolveTextGenerationProvider),
-        ),
+      updateSettings: (patch) => update(() => patch, true),
+      updateSettingsWith: (derive) => update(derive, false),
       streamChanges: Stream.empty,
       subscribeChanges: Effect.succeed(Stream.empty),
     } satisfies ServerSettingsService["Service"];
@@ -1058,13 +1079,45 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const updateSettings = (
+  /**
+   * A patch built from materialized settings carries every instance with its
+   * secrets in the clear, which would write each one to the secret store again.
+   * Instances the patch did not change keep their stored (redacted) form.
+   */
+  const keepUnchangedStoredInstances = (
+    stored: ServerSettings,
+    clear: ServerSettings,
     patch: ServerSettingsPatch,
+  ): ServerSettingsPatch => {
+    if (patch.providerInstances === undefined) return patch;
+    const providerInstances: Record<string, ProviderInstanceConfig> = {
+      ...patch.providerInstances,
+    };
+    for (const [instanceId, instance] of Object.entries(patch.providerInstances)) {
+      const id = ProviderInstanceId.make(instanceId);
+      const before = clear.providerInstances[id];
+      const kept = stored.providerInstances[id];
+      if (before !== undefined && kept !== undefined && Equal.equals(instance, before)) {
+        providerInstances[instanceId] = kept;
+      }
+    }
+    return {
+      ...patch,
+      providerInstances: providerInstances as ServerSettings["providerInstances"],
+    };
+  };
+
+  const updateSettingsLocked = (
+    derive: (current: ServerSettings) => Effect.Effect<ServerSettingsPatch, ServerSettingsError>,
+    fromClient: boolean,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
-        const patched = applyServerSettingsPatch(current, patch);
+        const patch = yield* derive(current);
+        const applied = applyServerSettingsPatch(current, patch);
+        // Only the server marks the instances an integration owns.
+        const patched = fromClient ? preserveIntegrationMarkers(current, applied) : applied;
         const newApiKey = patch.openRouter?.apiKey;
         // The OpenRouter key is copied into the managed instances, so a key
         // written through any patch must rewrite them too (one writer).
@@ -1074,8 +1127,12 @@ const make = Effect.gen(function* () {
             : yield* materializeProviderEnvironmentSecrets(patched).pipe(
                 Effect.map((clear) =>
                   applyServerSettingsPatch(
-                    clear,
-                    resolveOpenRouterSettingsPatch(clear, { apiKey: newApiKey }),
+                    patched,
+                    keepUnchangedStoredInstances(
+                      patched,
+                      clear,
+                      resolveOpenRouterSettingsPatch(clear, { apiKey: newApiKey }),
+                    ),
                   ),
                 ),
               );
@@ -1105,6 +1162,18 @@ const make = Effect.gen(function* () {
         yield* emitChange(next);
         return resolveTextGenerationProvider(materialized);
       }),
+    );
+
+  const updateSettings = (patch: ServerSettingsPatch) =>
+    updateSettingsLocked(() => Effect.succeed(patch), true);
+
+  const updateSettingsWith = (derive: (current: ServerSettings) => ServerSettingsPatch) =>
+    updateSettingsLocked(
+      (stored) =>
+        materializeProviderEnvironmentSecrets(stored).pipe(
+          Effect.map((clear) => keepUnchangedStoredInstances(stored, clear, derive(clear))),
+        ),
+      false,
     );
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
@@ -1183,6 +1252,7 @@ const make = Effect.gen(function* () {
       Effect.map(resolveTextGenerationProvider),
     ),
     updateSettings,
+    updateSettingsWith,
     get streamChanges() {
       return materializeChanges(Stream.fromPubSub(changesPubSub));
     },
