@@ -7,7 +7,10 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
+  DEFAULT_COMPOSER_PROMPT_HEIGHT_PX,
   DEFAULT_SERVER_SETTINGS,
+  MAX_COMPOSER_PROMPT_HEIGHT_PX,
+  MIN_COMPOSER_PROMPT_HEIGHT_PX,
   requiredScopesForProjectMutation,
   resolveIdleCompaction,
   resolveProjectProviderInstanceEnabled,
@@ -156,6 +159,19 @@ describe("resolveIdleCompaction", () => {
       "beforeCacheExpires",
     );
     expect(decodeServerSettings({}).compactIdleThreads).toBe("onReturn");
+  });
+});
+
+describe("composer prompt height", () => {
+  it("defaults to 78px and rejects a height outside the slider range", () => {
+    expect(decodeClientSettings({}).composerPromptHeight).toBe(DEFAULT_COMPOSER_PROMPT_HEIGHT_PX);
+    expect(decodeClientSettingsPatch({ composerPromptHeight: 120 }).composerPromptHeight).toBe(120);
+    expect(() =>
+      decodeClientSettingsPatch({ composerPromptHeight: MIN_COMPOSER_PROMPT_HEIGHT_PX - 2 }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ composerPromptHeight: MAX_COMPOSER_PROMPT_HEIGHT_PX + 2 }),
+    ).toThrow();
   });
 });
 
