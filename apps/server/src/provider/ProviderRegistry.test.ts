@@ -42,6 +42,7 @@ import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import * as ModelManifest from "./ModelManifest.ts";
+import * as OpenRouter from "./OpenRouter.ts";
 import { applyProviderCompatibility } from "./providerCompatibility.ts";
 import * as ResetCreditCoordinator from "./resetCreditCoordinator.ts";
 import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderLatestVersions";
@@ -103,7 +104,7 @@ const layerTestHttpClient = Layer.succeed(
   HttpClient.make((request) =>
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }))),
   ),
-).pipe(Layer.provideMerge(ModelManifest.layerTest));
+).pipe(Layer.provideMerge(ModelManifest.layerTest), Layer.provideMerge(OpenRouter.layerTest()));
 
 const layerBackgroundPolicyAlwaysRun = Layer.mock(BackgroundPolicy.BackgroundPolicy)({
   reportClientActivity: () => Effect.void,
@@ -1854,6 +1855,7 @@ it.layer(
           Layer.provideMerge(ProviderLatestVersions.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
+          Layer.provideMerge(OpenRouter.layerTest()),
           Layer.provideMerge(ResetCreditCoordinator.layerTest),
           Layer.provideMerge(
             OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),
@@ -1970,6 +1972,7 @@ it.layer(
           Layer.provideMerge(ProviderLatestVersions.layer),
           Layer.provideMerge(McpProviderSessions.layer),
           Layer.provideMerge(ModelManifest.layerTest),
+          Layer.provideMerge(OpenRouter.layerTest()),
           Layer.provideMerge(ResetCreditCoordinator.layerTest),
           Layer.provideMerge(
             OpenCodeRuntime.layer.pipe(Layer.provide(OpenCodeServerLedger.layerTest)),

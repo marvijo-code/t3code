@@ -1301,6 +1301,20 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => `${environmentId}:${input.instanceId}`,
       },
     }),
+    configureOpenRouter: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:configure-openrouter",
+      tag: WS_METHODS.serverConfigureOpenRouter,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
+    }),
+    testOpenRouterConnection: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:test-openrouter-connection",
+      tag: WS_METHODS.serverTestOpenRouterConnection,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
+      },
+    }),
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,

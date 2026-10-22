@@ -155,5 +155,23 @@ export function mapSettingsSecrets(
       ) as EasDeviceHostConfig,
   );
 
-  return { ...settings, providerInstances, sourceControlHosts, usageLimitSources, easDeviceHosts };
+  const openRouterSecret = map({
+    secretName: "openrouter-api-key",
+    kind: "field",
+    value: settings.openRouter.apiKey,
+    redacted: settings.openRouter.apiKey === SECRET_REDACTED,
+    sensitive: true,
+  });
+  const openRouter = {
+    apiKey: openRouterSecret.redacted ? SECRET_REDACTED : openRouterSecret.value,
+  };
+
+  return {
+    ...settings,
+    providerInstances,
+    sourceControlHosts,
+    usageLimitSources,
+    easDeviceHosts,
+    openRouter,
+  };
 }

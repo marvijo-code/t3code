@@ -116,6 +116,9 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   environmentThemes: Schema.optionalKey(Schema.Boolean),
   usageLimitSources: Schema.optionalKey(Schema.Boolean),
   usagePriceOverrides: Schema.optionalKey(Schema.Boolean),
+  /** Server exposes OpenRouter setup (server.configureOpenRouter, server.testOpenRouterConnection).
+      Absent on older servers, so clients hide the section instead of calling missing RPCs. */
+  openRouter: Schema.optionalKey(Schema.Boolean),
   usageModelAliases: Schema.optionalKey(Schema.Boolean),
   threadPinning: Schema.optionalKey(Schema.Boolean),
   threadPinReorder: Schema.optionalKey(Schema.Boolean),

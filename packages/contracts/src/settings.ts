@@ -836,6 +836,15 @@ export const GitHubHost = TrimmedNonEmptyString.pipe(
 export const SourceControlHostSettings = Schema.Record(Schema.String, Schema.Unknown);
 export type SourceControlHostSettings = typeof SourceControlHostSettings.Type;
 
+/**
+ * OpenRouter setup for this environment. The key lives in the server's secret store; settings and
+ * clients only see a redaction marker when one is set. Clients change it through
+ * `server.configureOpenRouter`, which also keeps the OpenRouter provider instances in step.
+ */
+const OpenRouterSettings = Schema.Struct({
+  apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+});
+
 export const ObservabilitySettings = Schema.Struct({
   otlpTracesUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   otlpMetricsUrl: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
@@ -1302,6 +1311,7 @@ export const ServerSettings = Schema.Struct({
   sourceControlHosts: Schema.Record(Schema.String, SourceControlHostSettings).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  openRouter: OpenRouterSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // Keyed by a user-chosen id so a source keeps its rows across edits. Entries
   // this build cannot decode round-trip untouched, as provider instances do.
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
@@ -1586,6 +1596,8 @@ export const ServerSettingsPatch = Schema.Struct({
    * secret is removed from the secret store.
    */
   sourceControlHosts: Schema.optionalKey(Schema.Record(Schema.String, SourceControlHostSettings)),
+  /** Written by the server's OpenRouter setup. Clients call `server.configureOpenRouter`. */
+  openRouter: Schema.optionalKey(Schema.Struct({ apiKey: Schema.optionalKey(TrimmedString) })),
   // Whole-map replacement for the new instance config. Patching individual
   // entries is intentionally out of scope: the map is small, and partial
   // patches risk leaving driver-specific config in a half-merged state.

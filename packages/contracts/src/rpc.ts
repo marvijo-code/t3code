@@ -163,6 +163,11 @@ import {
 import { ProviderInstanceId, ProviderInstanceMutation } from "./providerInstance.ts";
 import { PullRequestReviewGuideResult } from "./pullRequestReviewGuide.ts";
 import {
+  OpenRouterConfigureInput,
+  OpenRouterConnectionTestInput,
+  OpenRouterConnectionTestResult,
+} from "./openRouter.ts";
+import {
   PullRequestActionInput,
   PullRequestActivity,
   PullRequestChangeBreakdown,
@@ -484,6 +489,8 @@ export const WS_METHODS = {
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverGetSettings: "server.getSettings",
   serverUpdateSettings: "server.updateSettings",
+  serverConfigureOpenRouter: "server.configureOpenRouter",
+  serverTestOpenRouterConnection: "server.testOpenRouterConnection",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverSearchAcpRegistry: "server.searchAcpRegistry",
   serverPrepareAcpRegistryAgent: "server.prepareAcpRegistryAgent",
@@ -767,6 +774,19 @@ const WsServerUpdateSettingsRpc = Rpc.make(WS_METHODS.serverUpdateSettings, {
     providerInstanceMutation: Schema.optionalKey(ProviderInstanceMutation),
   }),
   success: ServerSettings,
+  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+/** Saves or removes the OpenRouter key and switches its per-harness provider instances. */
+const WsServerConfigureOpenRouterRpc = Rpc.make(WS_METHODS.serverConfigureOpenRouter, {
+  payload: OpenRouterConfigureInput,
+  success: ServerSettings,
+  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+const WsServerTestOpenRouterConnectionRpc = Rpc.make(WS_METHODS.serverTestOpenRouterConnection, {
+  payload: OpenRouterConnectionTestInput,
+  success: OpenRouterConnectionTestResult,
   error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
 });
 
@@ -1909,6 +1929,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetDatabaseStorageRpc,
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
+  WsServerConfigureOpenRouterRpc,
+  WsServerTestOpenRouterConnectionRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerSearchAcpRegistryRpc,
   WsServerPrepareAcpRegistryAgentRpc,
