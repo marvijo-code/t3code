@@ -151,6 +151,17 @@ export const TerminalFontSize = Schema.Int.check(
 export type TerminalFontSize = typeof TerminalFontSize.Type;
 const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
 
+export const MIN_COMPOSER_PROMPT_HEIGHT_PX = 48;
+export const MAX_COMPOSER_PROMPT_HEIGHT_PX = 320;
+export const ComposerPromptHeight = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_COMPOSER_PROMPT_HEIGHT_PX,
+    maximum: MAX_COMPOSER_PROMPT_HEIGHT_PX,
+  }),
+);
+export type ComposerPromptHeight = typeof ComposerPromptHeight.Type;
+export const DEFAULT_COMPOSER_PROMPT_HEIGHT_PX: ComposerPromptHeight = 78;
+
 export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
@@ -435,6 +446,9 @@ export const ClientSettingsSchema = Schema.Struct({
   contextWindowMeterEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   composerCollapseOnScroll: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   composerRichTextEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  composerPromptHeight: ComposerPromptHeight.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_COMPOSER_PROMPT_HEIGHT_PX)),
+  ),
   sendShortcut: Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("enter")),
   ),
@@ -1707,6 +1721,7 @@ export const ClientSettingsPatch = Schema.Struct({
   contextWindowMeterEnabled: Schema.optionalKey(Schema.Boolean),
   composerCollapseOnScroll: Schema.optionalKey(Schema.Boolean),
   composerRichTextEnabled: Schema.optionalKey(Schema.Boolean),
+  composerPromptHeight: Schema.optionalKey(ComposerPromptHeight),
   sendShortcut: Schema.optionalKey(Schema.Literals(["enter", "mod-enter-multiline", "mod-enter"])),
   followUpBehavior: Schema.optionalKey(Schema.Literals(["queue", "steer"])),
   proactivePanelsEnabled: Schema.optionalKey(Schema.Boolean),

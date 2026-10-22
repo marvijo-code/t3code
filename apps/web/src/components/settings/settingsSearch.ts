@@ -299,6 +299,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/appearance",
   },
   {
+    id: "composer-height",
+    title: "Composer height",
+    to: "/settings/appearance",
+    searchTerms: ["prompt input box size tall short resize textarea"],
+  },
+  {
     id: "project-grouping",
     title: "Project grouping",
     to: "/settings/general",

@@ -186,6 +186,7 @@ function RootRouteView() {
           <EnvironmentThemeSync />
           <GlassAppearanceSync />
           <FontAppearanceSync />
+          <ComposerPromptHeightSync />
           <ProviderAuthCallbackCoordinator />
           <CustomSnoozeDialogHost />
           <CommandPalette>
@@ -225,6 +226,7 @@ function RootRouteView() {
         <EnvironmentThemeSync />
         <GlassAppearanceSync />
         <FontAppearanceSync />
+        <ComposerPromptHeightSync />
         <ProviderAuthCallbackCoordinator />
         <ChatGptWelcomeCoordinator />
         <FirstRunGate
@@ -306,6 +308,20 @@ function GlassAppearanceSync() {
       style.removeProperty("--glass-blur");
     }
   }, [glassOpacity]);
+
+  return null;
+}
+
+function ComposerPromptHeightSync() {
+  const composerPromptHeight = useClientSettings((settings) => settings.composerPromptHeight);
+
+  useEffect(() => {
+    const style = document.documentElement.style;
+    style.setProperty("--composer-prompt-height", `${composerPromptHeight}px`);
+    // The prompt may grow while it is typed into, but never shorter than the
+    // configured height.
+    style.setProperty("--composer-prompt-max-height", `${Math.max(208, composerPromptHeight)}px`);
+  }, [composerPromptHeight]);
 
   return null;
 }

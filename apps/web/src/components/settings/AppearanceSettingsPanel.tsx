@@ -6,9 +6,11 @@ import {
   type ChatWidth,
   type EnvironmentIdentificationMode,
   MAX_APPEARANCE_CONTRAST,
+  MAX_COMPOSER_PROMPT_HEIGHT_PX,
   MAX_GLASS_OPACITY,
   MAX_PANEL_ANIMATION_DURATION_MS,
   MIN_APPEARANCE_CONTRAST,
+  MIN_COMPOSER_PROMPT_HEIGHT_PX,
   MIN_GLASS_OPACITY,
   MIN_PANEL_ANIMATION_DURATION_MS,
 } from "@t3tools/contracts/settings";
@@ -81,6 +83,13 @@ export function AppearanceSettingsPanel() {
   const panelAnimationDurationSliderStyle = {
     "--settings-slider-progress": `${panelAnimationDurationRatio * 100}%`,
     "--settings-slider-fill-offset": `${0.5 - panelAnimationDurationRatio}rem`,
+  } as CSSProperties;
+  const composerPromptHeightRatio =
+    (settings.composerPromptHeight - MIN_COMPOSER_PROMPT_HEIGHT_PX) /
+    (MAX_COMPOSER_PROMPT_HEIGHT_PX - MIN_COMPOSER_PROMPT_HEIGHT_PX);
+  const composerPromptHeightSliderStyle = {
+    "--settings-slider-progress": `${composerPromptHeightRatio * 100}%`,
+    "--settings-slider-fill-offset": `${0.5 - composerPromptHeightRatio}rem`,
   } as CSSProperties;
 
   return (
@@ -316,6 +325,54 @@ export function AppearanceSettingsPanel() {
               }
               aria-label="Keep composer context visible in active threads"
             />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("composer-height")}
+          description="Set how tall the prompt box is before it starts to scroll."
+          resetAction={
+            settings.composerPromptHeight !== DEFAULT_UNIFIED_SETTINGS.composerPromptHeight ? (
+              <SettingResetButton
+                label="composer height"
+                onClick={() =>
+                  updateSettings({
+                    composerPromptHeight: DEFAULT_UNIFIED_SETTINGS.composerPromptHeight,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex w-full items-center gap-3 sm:w-52">
+              <output
+                className="min-w-12 rounded-md bg-muted px-2 py-1 text-center font-mono text-xs font-medium tabular-nums text-foreground"
+                htmlFor="composer-prompt-height"
+              >
+                {settings.composerPromptHeight}px
+              </output>
+              <input
+                aria-label="Composer height"
+                className="settings-slider min-w-0 flex-1"
+                id="composer-prompt-height"
+                max={MAX_COMPOSER_PROMPT_HEIGHT_PX}
+                min={MIN_COMPOSER_PROMPT_HEIGHT_PX}
+                onChange={(event) => {
+                  const composerPromptHeight = Number(event.currentTarget.value);
+                  if (
+                    Number.isInteger(composerPromptHeight) &&
+                    composerPromptHeight >= MIN_COMPOSER_PROMPT_HEIGHT_PX &&
+                    composerPromptHeight <= MAX_COMPOSER_PROMPT_HEIGHT_PX
+                  ) {
+                    updateSettings({ composerPromptHeight });
+                  }
+                }}
+                step={2}
+                style={composerPromptHeightSliderStyle}
+                type="range"
+                value={settings.composerPromptHeight}
+              />
+            </div>
           }
         />
 

@@ -44,10 +44,11 @@ export function shouldUseRestingComposerLayout(input: {
 /**
  * How much taller the empty expanded composer is than its resting row on
  * desktop widths, from the layout classes in ChatComposer: the body loses
- * 8px of top padding, the prompt clamps from min-h-17.5 (70px) to 32px, and
- * the 48px footer leaves flow.
+ * 8px of top padding, the prompt clamps from its configured height to 32px,
+ * and the 48px footer leaves flow.
  */
 const COMPOSER_RESTING_EXPANSION_MIN_PX = 94;
+const DEFAULT_COMPOSER_PROMPT_HEIGHT_PX = 78;
 
 /**
  * Reserving only the resting height lets a scroll to the end land flush against the short
@@ -60,16 +61,24 @@ export function resolveComposerTimelineInset(input: {
   isResting: boolean;
   restingOnlyHeight?: number;
   expandedNoticesHeight?: number;
+  composerPromptHeight?: number;
 }): number {
   // Expanded notices temporarily cover the timeline. Remove their growth before
   // rounding so fractional measurements reserve exactly the collapsed height.
   const overlayHeight = Math.ceil(input.overlayHeight - (input.expandedNoticesHeight ?? 0));
+  const promptHeightGrowth = Math.max(
+    0,
+    (input.composerPromptHeight ?? DEFAULT_COMPOSER_PROMPT_HEIGHT_PX) -
+      DEFAULT_COMPOSER_PROMPT_HEIGHT_PX,
+  );
   return input.isResting
     ? Math.max(
         input.currentInset,
         overlayHeight +
           (input.currentInset === 0
-            ? COMPOSER_RESTING_EXPANSION_MIN_PX - (input.restingOnlyHeight ?? 0)
+            ? COMPOSER_RESTING_EXPANSION_MIN_PX +
+              promptHeightGrowth -
+              (input.restingOnlyHeight ?? 0)
             : 0),
       )
     : overlayHeight;

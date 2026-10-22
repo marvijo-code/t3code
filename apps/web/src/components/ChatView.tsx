@@ -2241,6 +2241,7 @@ export default function ChatView(props: ChatViewProps) {
       isResting,
       restingOnlyHeight,
       expandedNoticesHeight,
+      composerPromptHeight: settings.composerPromptHeight,
     });
     if (composerTimelineInsetRef.current !== nextInset) {
       composerTimelineInsetRef.current = nextInset;
