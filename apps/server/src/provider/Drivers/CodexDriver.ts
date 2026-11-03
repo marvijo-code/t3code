@@ -31,6 +31,8 @@ import { resolveCodexLaunchArgs } from "../codexLaunchArgs.ts";
 import { makeManagedServerProvider } from "@t3tools/provider-core/server/managedProvider";
 import * as ModelCatalog from "@t3tools/provider-core/server/ModelCatalog";
 import { applyCodexModelCatalog } from "../codexModelCatalog.ts";
+import * as OpenRouter from "../OpenRouter.ts";
+import { ensureOpenRouterCodexLaunchArgs } from "../openRouterInstances.ts";
 import type { ProviderDriver, ProviderInstance } from "@t3tools/provider-core/server/driver";
 import { withInstanceIdentity } from "@t3tools/provider-core/server/instanceIdentity";
 import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/instanceEnvironment";
@@ -105,6 +107,7 @@ export type CodexDriverEnv =
   | HttpClient.HttpClient
   | ProviderLatestVersions.ProviderLatestVersions
   | ModelCatalog.ModelCatalog
+  | OpenRouter.OpenRouter
   | Path.Path
   | ProviderEventLoggers.ProviderEventLoggers
   | ServerConfig.ServerConfig
@@ -152,17 +155,30 @@ export const CodexDriver: ProviderDriver<
     const installation = yield* CodexInstallation.CodexInstallation;
     const modelCatalog = yield* ModelCatalog.ModelCatalog;
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
-    const processEnv = yield* mergeProviderInstanceEnvironment(
+    const mergedEnv = yield* mergeProviderInstanceEnvironment(
       environment,
       yield* HostProcess.Environment,
     );
+    const openRouter = OpenRouter.instanceSupport(yield* OpenRouter.OpenRouter, {
+      instanceId,
+      driverKind: DRIVER_KIND,
+    });
+    // T3CODE_CODEX_LAUNCH_ARGS outranks the instance's launch args, which would
+    // silently drop the OpenRouter routing and send the model slug to OpenAI.
+    // A managed instance folds the override into its launch args instead.
+    const { T3CODE_CODEX_LAUNCH_ARGS: _launchArgsOverride, ...managedEnv } = mergedEnv;
+    const processEnv = openRouter.managed ? managedEnv : mergedEnv;
     const environmentHome = processEnv.CODEX_HOME;
     const homeLayout = yield* resolveCodexHomeLayout(
       !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome?.trim()
         ? { ...config, homePath: environmentHome }
         : config,
     );
-    const continuationIdentity = codexContinuationIdentity(homeLayout);
+    const homeContinuationIdentity = codexContinuationIdentity(homeLayout);
+    const continuationIdentity = {
+      ...homeContinuationIdentity,
+      continuationKey: openRouter.continuationKey(homeContinuationIdentity.continuationKey),
+    };
     const stampIdentity = withInstanceIdentity({
       instanceId,
       driverKind: DRIVER_KIND,
@@ -183,6 +199,9 @@ export const CodexDriver: ProviderDriver<
     );
     const effectiveConfig = {
       ...config,
+      launchArgs: openRouter.managed
+        ? ensureOpenRouterCodexLaunchArgs(resolveCodexLaunchArgs(config.launchArgs, mergedEnv))
+        : config.launchArgs,
       enabled,
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
       homePath: homeLayout.effectiveHomePath ?? "",
@@ -231,12 +250,20 @@ export const CodexDriver: ProviderDriver<
     const checkProvider = modelCatalog.refreshInBackground.pipe(
       Effect.andThen(
         Effect.zipWith(
-          checkCodexProviderStatus(effectiveConfig, undefined, processEnv),
+          checkCodexProviderStatus(
+            effectiveConfig,
+            undefined,
+            processEnv,
+            openRouter.managed ? OpenRouter.OPENROUTER_PROVIDER_AUTH : undefined,
+          ),
           currentCatalog,
-          (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
+          (draft, catalog) => applyCodexModelCatalog(draft, catalog),
           { concurrent: true },
         ),
       ),
+      // After the catalog: it would classify every OpenRouter slug as legacy.
+      Effect.flatMap(openRouter.checked),
+      Effect.map(stampIdentity),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, pathService),
@@ -251,8 +278,8 @@ export const CodexDriver: ProviderDriver<
         Effect.zipWith(
           makePendingCodexProvider(settings.provider),
           currentCatalog,
-          (draft, catalog) => stampIdentity(applyCodexModelCatalog(draft, catalog)),
-        ),
+          (draft, catalog) => applyCodexModelCatalog(draft, catalog),
+        ).pipe(Effect.flatMap(openRouter.pending), Effect.map(stampIdentity)),
       checkProvider,
       enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
         resolveMaintenance().pipe(
@@ -376,6 +403,7 @@ export const CodexDriver: ProviderDriver<
       accentColor,
       enabled,
       snapshot,
+      invalidateCaches: openRouter.invalidate,
       snapshotForCwd,
       consumeResetCredit,
       orchestrationAdapter,

@@ -32,6 +32,7 @@ import * as ProviderLatestVersions from "@t3tools/provider-core/server/ProviderL
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderEventLoggers from "@t3tools/provider-core/server/ProviderEventLoggers";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as OpenRouter from "../OpenRouter.ts";
 import {
   createProviderVersionAdvisory,
   resolveLatestProviderVersion,
@@ -73,6 +74,7 @@ const layerDeps = ServerConfig.layerTest(process.cwd(), {
   ),
   Layer.provideMerge(ServerSettings.layerTest()),
   Layer.provideMerge(ModelManifest.layerTest),
+  Layer.provideMerge(OpenRouter.layerTest()),
   Layer.provideMerge(ResetCreditCoordinator.layerTest),
   Layer.provideMerge(
     Layer.mock(BackgroundPolicy.BackgroundPolicy)({

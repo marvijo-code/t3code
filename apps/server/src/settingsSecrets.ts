@@ -182,6 +182,12 @@ export function mapSettingsSecrets(
       ) as SimlockDeviceHostConfig,
   );
 
+  const openRouter = mapFields(
+    settings.openRouter,
+    ["apiKey"],
+    () => "openrouter-api-key",
+  ) as ServerSettings["openRouter"];
+
   return {
     ...settings,
     providerInstances,
@@ -189,5 +195,6 @@ export function mapSettingsSecrets(
     usageLimitSources,
     easDeviceHosts,
     simlockDeviceHosts,
+    openRouter,
   };
 }

@@ -110,6 +110,11 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   providerWorkspaceSnapshotsOnDemand: Schema.optionalKey(Schema.Boolean),
   usagePriceOverrides: Schema.optionalKey(Schema.Boolean),
   usageModelAliases: Schema.optionalKey(Schema.Boolean),
+  /** Server exposes OpenRouter setup (server.configureOpenRouter, server.testOpenRouterConnection).
+      Absent on older servers, so clients hide the section instead of calling missing RPCs. */
+  openRouter: Schema.optionalKey(Schema.Boolean),
+  /** Server understands thread.pin / thread.unpin commands. Same
+      version-skew contract as threadSettlement. */
   threadPinning: Schema.optionalKey(Schema.Boolean),
   threadPinReorder: Schema.optionalKey(Schema.Boolean),
   threadActiveReorder: Schema.optionalKey(Schema.Boolean),

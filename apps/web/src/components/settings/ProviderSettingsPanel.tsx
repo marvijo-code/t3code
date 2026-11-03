@@ -97,6 +97,7 @@ import { IntervalSecondsField } from "./IntervalSecondsField";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
 import { useSecretSources } from "./SecretSourceInput";
 import { UsageProviderSettings } from "./UsageProviderSettings";
+import { OpenRouterSettings } from "./OpenRouterSettings";
 import { ProviderSetupSection, readAntigravityAuthMethod } from "./ProviderSetupSection";
 import { ProviderAuthenticationSection } from "./ProviderAuthenticationSection";
 import { CodexSetupSection, CodexManagedRuntimeFields } from "./CodexSetupSection";
@@ -1099,6 +1100,13 @@ export function EnvironmentProviderSettings({
           </div>
         </SettingsGroup>
       </SettingsSection>
+
+      <OpenRouterSettings
+        // Drafts belong to one environment; switching must not carry them over.
+        key={`openrouter:${environmentId}`}
+        environmentId={environmentId}
+        readOnly={readOnly}
+      />
 
       <UsageProviderSettings
         key={environmentId}
