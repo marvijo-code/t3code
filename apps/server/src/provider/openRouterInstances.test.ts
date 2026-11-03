@@ -11,8 +11,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   applyOpenRouterCatalog,
   ensureOpenRouterCodexLaunchArgs,
+  OPENROUTER_ATTRIBUTION_HEADERS,
   OPENROUTER_CODEX_LAUNCH_ARGS,
   resolveOpenRouterSettingsPatch,
+  withOpenRouterAttributionConfig,
 } from "./openRouterInstances.ts";
 
 const codexId = ProviderInstanceId.make("openrouter_codex");
@@ -57,6 +59,11 @@ describe("resolveOpenRouterSettingsPatch", () => {
         { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
         { name: "ANTHROPIC_AUTH_TOKEN", value: "sk-or-test", sensitive: true },
         { name: "ANTHROPIC_API_KEY", value: "", sensitive: false },
+        {
+          name: "ANTHROPIC_CUSTOM_HEADERS",
+          value: "HTTP-Referer: https://t3.codes\nX-Title: T3 Code",
+          sensitive: false,
+        },
       ],
       config: {},
     });
@@ -64,7 +71,15 @@ describe("resolveOpenRouterSettingsPatch", () => {
       driver: "opencode",
       displayName: "OpenRouter (OpenCode)",
       enabled: true,
-      environment: [{ name: "OPENROUTER_API_KEY", value: "sk-or-test", sensitive: true }],
+      environment: [
+        { name: "OPENROUTER_API_KEY", value: "sk-or-test", sensitive: true },
+        {
+          name: "OPENCODE_CONFIG_CONTENT",
+          value:
+            '{"provider":{"openrouter":{"options":{"headers":{"HTTP-Referer":"https://t3.codes","X-Title":"T3 Code"}}}}}',
+          sensitive: false,
+        },
+      ],
       config: {},
     });
   });
@@ -257,5 +272,93 @@ describe("applyOpenRouterCatalog", () => {
     expect(disabled.usageLimits).toBeUndefined();
     const untouched = draft([model({})], false);
     expect(applyOpenRouterCatalog(claude, untouched, [])).toBe(untouched);
+  });
+});
+
+describe("OpenRouter attribution", () => {
+  it("names T3 Code on every harness", () => {
+    const next = apply(settings(), {
+      apiKey: "sk-or-test",
+      harnesses: { codex: true, claudeAgent: true, opencode: true },
+    });
+    const codexConfig = next.providerInstances[codexId]!.config as { launchArgs: string };
+    expect(codexConfig.launchArgs).toContain(
+      'model_providers.openrouter.http_headers={ "HTTP-Referer" = "https://t3.codes", "X-Title" = "T3 Code" }',
+    );
+    expect(next.providerInstances[claudeId]!.environment).toContainEqual({
+      name: "ANTHROPIC_CUSTOM_HEADERS",
+      value: "HTTP-Referer: https://t3.codes\nX-Title: T3 Code",
+      sensitive: false,
+    });
+    const openCodeConfig = next.providerInstances[openCodeId]!.environment!.find(
+      (variable) => variable.name === "OPENCODE_CONFIG_CONTENT",
+    );
+    expect(JSON.parse(openCodeConfig!.value)).toEqual({
+      provider: { openrouter: { options: { headers: { ...OPENROUTER_ATTRIBUTION_HEADERS } } } },
+    });
+  });
+
+  it("keeps a user's inline OpenCode config and adds the headers", () => {
+    const merged = JSON.parse(
+      withOpenRouterAttributionConfig(
+        JSON.stringify({
+          theme: "dark",
+          provider: {
+            openrouter: {
+              options: { baseURL: "http://localhost:8080/v1", headers: { "X-Mine": "1" } },
+            },
+          },
+        }),
+      ),
+    );
+    expect(merged).toEqual({
+      theme: "dark",
+      provider: {
+        openrouter: {
+          options: {
+            baseURL: "http://localhost:8080/v1",
+            headers: { "X-Mine": "1", ...OPENROUTER_ATTRIBUTION_HEADERS },
+          },
+        },
+      },
+    });
+  });
+
+  it("leaves an inline OpenCode config it cannot parse alone", () => {
+    expect(withOpenRouterAttributionConfig("theme = dark")).toBe("theme = dark");
+  });
+
+  it("fills in a missing inline OpenCode config", () => {
+    expect(JSON.parse(withOpenRouterAttributionConfig("   "))).toEqual({
+      provider: { openrouter: { options: { headers: { ...OPENROUTER_ATTRIBUTION_HEADERS } } } },
+    });
+  });
+});
+
+describe("OpenRouter attribution", () => {
+  it("sends both headers from the Codex launch args as one TOML inline table", () => {
+    expect(OPENROUTER_CODEX_LAUNCH_ARGS).toContain(
+      '-c \'model_providers.openrouter.http_headers={ "HTTP-Referer" = "https://t3.codes", "X-Title" = "T3 Code" }\'',
+    );
+  });
+
+  it("keeps an OpenCode inline config the user already set", () => {
+    const theirs = JSON.stringify({
+      model: "x",
+      provider: { openrouter: { options: { headers: { "X-Other": "1" } } } },
+    });
+    expect(JSON.parse(withOpenRouterAttributionConfig(theirs))).toEqual({
+      model: "x",
+      provider: {
+        openrouter: {
+          options: { headers: { "X-Other": "1", ...OPENROUTER_ATTRIBUTION_HEADERS } },
+        },
+      },
+    });
+  });
+
+  it("leaves an OpenCode inline config it cannot read exactly as it was", () => {
+    expect(withOpenRouterAttributionConfig("{ not json")).toBe("{ not json");
+    expect(withOpenRouterAttributionConfig("[]")).toBe("[]");
   });
 });

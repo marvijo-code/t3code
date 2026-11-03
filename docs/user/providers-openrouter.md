@@ -44,5 +44,8 @@ Providers** and add its full OpenRouter ID with **Add custom model**.
   priority over the OpenRouter key. If Claude Code does not use OpenRouter, run
   `/logout` in Claude Code once and try again.
 - Usage is billed by OpenRouter. Check spend in OpenRouter's activity page.
+- OpenRouter shows these requests as the **T3 Code** app, because each harness
+  sends the `X-Title` and `HTTP-Referer` attribution headers. Without them the
+  requests would land under "Unknown" in OpenRouter's app list and logs.
 - You can rename an OpenRouter provider or add environment variables to it like any
   other provider. Saving a new key updates all three.
