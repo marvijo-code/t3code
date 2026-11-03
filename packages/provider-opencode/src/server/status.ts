@@ -9,6 +9,7 @@ import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as P from "effect/Predicate";
 import * as Schedule from "effect/Schedule";
 
 import { createModelCapabilities } from "@t3tools/shared/model";
@@ -452,6 +453,28 @@ const catalogFingerprint = (models: ReadonlyArray<OpenCode2Model>) =>
     .toSorted()
     .join("\n");
 
+const CATALOG_RETRY_SPACING = "250 millis";
+
+/**
+ * A cold server activates a location's plugins before it answers its catalog, and that activation
+ * took about five seconds on a warm disk. App startup also runs the 1.x CLI probes and a second
+ * server, so a busy machine has held the activation past thirty seconds, which used to publish an
+ * empty catalog for the rest of the session. The loop exits as soon as two reads agree, so a warm
+ * server still answers in a few hundred milliseconds and this is only the ceiling.
+ */
+const CATALOG_LOAD_TIMEOUT = "120 seconds";
+
+/** Until those plugins finish activating, the server rejects reads as temporarily unavailable. */
+const isServerStarting = (error: unknown): boolean => {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4; depth++) {
+    if (P.isTagged(current, "ServiceUnavailableError")) return true;
+    if (!P.hasProperty(current, "cause")) return false;
+    current = current.cause;
+  }
+  return false;
+};
+
 /** A cold server can list a partial catalog; two agreeing reads reduce that startup race. */
 export const makeOpenCode2ModelLoader = <E>(
   list: Effect.Effect<ReadonlyArray<OpenCode2Model>, E>,
@@ -462,6 +485,7 @@ export const makeOpenCode2ModelLoader = <E>(
       let previous: string | undefined;
       let latest: ReadonlyArray<OpenCode2Model> = [];
       return list.pipe(
+        Effect.retry({ while: isServerStarting, schedule: Schedule.spaced(CATALOG_RETRY_SPACING) }),
         Effect.repeat({
           until: (models) => {
             if (models.length > 0) latest = models;
@@ -470,10 +494,10 @@ export const makeOpenCode2ModelLoader = <E>(
             previous = fingerprint;
             return settled;
           },
-          schedule: Schedule.spaced("250 millis"),
+          schedule: Schedule.spaced(CATALOG_RETRY_SPACING),
         }),
         Effect.catch((error) => (latest.length > 0 ? Effect.succeed(latest) : Effect.fail(error))),
-        Effect.timeoutOption("5 seconds"),
+        Effect.timeoutOption(CATALOG_LOAD_TIMEOUT),
         Effect.map((loaded) => {
           // Fresh progress may still be partial, but a warm cache must not freeze slow catalogs.
           if (loaded._tag === "Some") lastLoaded = loaded.value;
