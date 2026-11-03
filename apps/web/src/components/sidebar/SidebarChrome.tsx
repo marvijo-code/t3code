@@ -15,6 +15,7 @@ import { primaryServerKeybindingsAtom } from "../../state/server";
 import { cn } from "../../lib/utils";
 import { usePullRequestsSupported } from "../../state/environments";
 import { T3Wordmark } from "../T3Wordmark";
+import { APP_BUILD_STAMP } from "../../branding";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -74,6 +75,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
       <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
         <div className="flex shrink-0 items-center gap-1">
           <SidebarBrand onBackdrop={backdropVariant !== null} />
+          <BuildStamp onBackdrop={backdropVariant !== null} />
           {isElectron ? (
             <div className="hidden items-center md:flex">
               <HistoryNavigationButton direction="back" onBackdrop={backdropVariant !== null} />
@@ -177,8 +179,26 @@ function SidebarBrand({ onBackdrop }: { onBackdrop: boolean }) {
   );
 }
 
-function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {
+/** Always-on identity of the running client: version and build time. */
+function BuildStamp({ onBackdrop }: { onBackdrop: boolean }) {
+  if (APP_BUILD_STAMP.length === 0) {
+    return null;
+  }
+
   return (
+    <span
+      className={cn(
+        "shrink-0 truncate text-[11px] leading-none tabular-nums",
+        onBackdrop ? "text-white/60" : "text-muted-foreground",
+      )}
+      title={`Built ${APP_BUILD_STAMP}`}
+    >
+      {APP_BUILD_STAMP}
+    </span>
+  );
+}
+
+function SidebarBrandMark({ onBackdrop }: { onBackdrop: boolean }) {  return (
     <span className="inline-flex min-w-0 items-baseline gap-1 text-sm font-medium tracking-tight">
       <T3Wordmark aria-label="T3" className="h-[1cap] w-auto shrink-0" />
       <span
