@@ -11,6 +11,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
+import * as TestClock from "effect/testing/TestClock";
 import { beforeEach } from "vite-plus/test";
 
 import { OpenCodeSettings } from "../settings.ts";
@@ -19,6 +20,7 @@ import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
 import {
   checkOpenCodeProviderStatus,
   loadOpenCode2Workspace,
+  makeOpenCode2ModelLoader,
   type OpenCode2Model,
   type OpenCode2Workspace,
 } from "./status.ts";
@@ -753,6 +755,87 @@ it.layer(layerTest)("checkOpenCodeProviderStatus", (it) => {
         snapshot.slashCommands.map((command) => command.name),
         ["compact"],
       );
+    }),
+  );
+
+  it.effect("waits out a cold OpenCode 2 server that is still activating its plugins", () =>
+    Effect.gen(function* () {
+      const models: ReadonlyArray<OpenCode2Model> = [
+        { providerID: "opencode", id: "opus-5", name: "Opus 5", variants: [{ id: "high" }] },
+      ];
+      const starting = new OpenCodeRuntime.OpenCodeRuntimeError({
+        operation: "model.list",
+        detail: "The OpenCode server could not list its models.",
+        cause: {
+          _tag: "ServiceUnavailableError",
+          message: "Location plugins did not finish activating",
+        },
+      });
+      let attempts = 0;
+      const load = yield* makeOpenCode2ModelLoader(
+        Effect.suspend(() => {
+          attempts += 1;
+          return attempts < 4 ? Effect.fail(starting) : Effect.succeed(models);
+        }),
+      );
+      const loading = yield* load.pipe(Effect.forkChild);
+      yield* TestClock.adjust("10 seconds");
+      const loaded = yield* Fiber.join(loading);
+
+      NodeAssert.deepEqual(loaded, models);
+      // Three rejections, the read that answers, and the second read that agrees with it.
+      NodeAssert.equal(attempts, 5);
+    }),
+  );
+
+  it.effect("keeps waiting for a boot storm that holds the catalog past the old budget", () =>
+    Effect.gen(function* () {
+      const models: ReadonlyArray<OpenCode2Model> = [
+        { providerID: "opencode", id: "opus-5", name: "Opus 5", variants: [{ id: "high" }] },
+      ];
+      const starting = new OpenCodeRuntime.OpenCodeRuntimeError({
+        operation: "model.list",
+        detail: "The OpenCode server could not list its models.",
+        cause: {
+          _tag: "ServiceUnavailableError",
+          message: "Location plugins did not finish activating",
+        },
+      });
+      let attempts = 0;
+      const load = yield* makeOpenCode2ModelLoader(
+        Effect.suspend(() => {
+          attempts += 1;
+          // Startup also runs the 1.x CLI probes and a second server, which has held activation
+          // past the old thirty second ceiling.
+          return attempts < 160 ? Effect.fail(starting) : Effect.succeed(models);
+        }),
+      );
+      const loading = yield* load.pipe(Effect.forkChild);
+      yield* TestClock.adjust("40 seconds");
+      const loaded = yield* Fiber.join(loading);
+
+      NodeAssert.deepEqual(loaded, models);
+      NodeAssert.equal(attempts, 161);
+    }),
+  );
+
+  it.effect("fails at once when the model list is rejected for another reason", () =>
+    Effect.gen(function* () {
+      const rejected = new OpenCodeRuntime.OpenCodeRuntimeError({
+        operation: "model.list",
+        detail: "The OpenCode server rejected the server password.",
+      });
+      let attempts = 0;
+      const load = yield* makeOpenCode2ModelLoader(
+        Effect.suspend(() => {
+          attempts += 1;
+          return Effect.fail(rejected);
+        }),
+      );
+      const result = yield* load.pipe(Effect.exit);
+
+      NodeAssert.equal(result._tag, "Failure");
+      NodeAssert.equal(attempts, 1);
     }),
   );
 
