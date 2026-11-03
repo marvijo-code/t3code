@@ -24,6 +24,21 @@ export interface OpenRouterCatalogModel {
   readonly name: string;
 }
 
+/**
+ * OpenRouter names the calling app from these two headers. A request without
+ * them lands under "Unknown" in the account's app list and logs.
+ */
+export const OPENROUTER_ATTRIBUTION_HEADERS = {
+  "HTTP-Referer": "https://t3.codes",
+  "X-Title": "T3 Code",
+} as const;
+
+/** A TOML inline table, the one form Codex reads from a `-c` override. */
+const tomlHeaders = (headers: Readonly<Record<string, string>>): string =>
+  `{ ${Object.entries(headers)
+    .map(([name, value]) => `"${name}" = "${value}"`)
+    .join(", ")} }`;
+
 const OPENROUTER_CODEX_LAUNCH_TOKENS = [
   'model_provider="openrouter"',
   'model_providers.openrouter.name="OpenRouter"',
@@ -32,23 +47,91 @@ const OPENROUTER_CODEX_LAUNCH_TOKENS = [
   'model_providers.openrouter.wire_api="responses"',
   "model_providers.openrouter.requires_openai_auth=false",
   "model_providers.openrouter.supports_websockets=false",
+  `model_providers.openrouter.http_headers=${tomlHeaders(OPENROUTER_ATTRIBUTION_HEADERS)}`,
 ].map((value) => `-c '${value}'`);
 
 export const OPENROUTER_CODEX_LAUNCH_ARGS = OPENROUTER_CODEX_LAUNCH_TOKENS.join(" ");
 
 type OpenRouterHarnessDefinition = (typeof OPENROUTER_HARNESSES)[number];
 
+/** Claude Code reads custom headers as newline-separated `Name: Value` lines. */
+const OPENROUTER_CLAUDE_HEADERS = Object.entries(OPENROUTER_ATTRIBUTION_HEADERS)
+  .map(([name, value]) => `${name}: ${value}`)
+  .join("\n");
+
+/** OpenCode reads custom provider headers from its inline config. */
+const OPENROUTER_OPENCODE_CONFIG = {
+  provider: { openrouter: { options: { headers: OPENROUTER_ATTRIBUTION_HEADERS } } },
+};
+
+type JsonObject = Record<string, unknown>;
+
+const asJsonObject = (value: unknown): JsonObject | null =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as JsonObject)
+    : null;
+
+const parseJsonObject = (raw: string): JsonObject | null => {
+  try {
+    return asJsonObject(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+};
+
+const mergeJsonObjects = (base: JsonObject, patch: JsonObject): JsonObject => {
+  const merged: JsonObject = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    const patchChild = asJsonObject(value);
+    const baseChild = asJsonObject(merged[key]);
+    merged[key] =
+      patchChild !== null && baseChild !== null ? mergeJsonObjects(baseChild, patchChild) : value;
+  }
+  return merged;
+};
+
+/**
+ * The inline config is the one OpenCode layer T3 can add to without editing the
+ * user's files, and OpenCode merges it over their config. A value that is not a
+ * JSON object is theirs alone, so it is left exactly as they set it.
+ */
+export function withOpenRouterAttributionConfig(raw: string | undefined): string {
+  if (raw === undefined || raw.trim().length === 0)
+    return JSON.stringify(OPENROUTER_OPENCODE_CONFIG);
+  const existing = parseJsonObject(raw);
+  return existing === null
+    ? raw
+    : JSON.stringify(mergeJsonObjects(existing, OPENROUTER_OPENCODE_CONFIG));
+}
+
 const managedEnvironment = (
   harness: OpenRouterHarness,
   apiKey: string,
-): ReadonlyArray<ProviderInstanceEnvironmentVariable> =>
-  harness === "claudeAgent"
-    ? [
-        { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
-        { name: "ANTHROPIC_AUTH_TOKEN", value: apiKey, sensitive: true },
-        { name: "ANTHROPIC_API_KEY", value: "", sensitive: false },
-      ]
-    : [{ name: "OPENROUTER_API_KEY", value: apiKey, sensitive: true }];
+  existingEnvironment: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
+): ReadonlyArray<ProviderInstanceEnvironmentVariable> => {
+  if (harness === "claudeAgent") {
+    return [
+      { name: "ANTHROPIC_BASE_URL", value: "https://openrouter.ai/api", sensitive: false },
+      { name: "ANTHROPIC_AUTH_TOKEN", value: apiKey, sensitive: true },
+      { name: "ANTHROPIC_API_KEY", value: "", sensitive: false },
+      { name: "ANTHROPIC_CUSTOM_HEADERS", value: OPENROUTER_CLAUDE_HEADERS, sensitive: false },
+    ];
+  }
+  if (harness === "opencode") {
+    const inlineConfig = existingEnvironment?.find(
+      (variable) => variable.name === "OPENCODE_CONFIG_CONTENT",
+    );
+    return [
+      { name: "OPENROUTER_API_KEY", value: apiKey, sensitive: true },
+      {
+        name: "OPENCODE_CONFIG_CONTENT",
+        value: withOpenRouterAttributionConfig(inlineConfig?.value),
+        sensitive: false,
+      },
+    ];
+  }
+  return [{ name: "OPENROUTER_API_KEY", value: apiKey, sensitive: true }];
+};
 
 const readConfigObject = (config: unknown): Record<string, unknown> =>
   config !== null && typeof config === "object" && !Array.isArray(config)
@@ -79,7 +162,7 @@ function buildInstance(input: {
   readonly enabled: boolean;
 }): ProviderInstanceConfig {
   const { harness, existing, apiKey, enabled } = input;
-  const managed = managedEnvironment(harness.harness, apiKey);
+  const managed = managedEnvironment(harness.harness, apiKey, existing?.environment);
   const managedNames = new Set(managed.map((variable) => variable.name));
   const config = readConfigObject(existing?.config);
   return {
