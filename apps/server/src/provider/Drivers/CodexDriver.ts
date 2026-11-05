@@ -157,7 +157,10 @@ export const CodexDriver: ProviderDriver<
     const installation = yield* CodexInstallation.CodexInstallation;
     const modelCatalog = yield* ModelCatalog.ModelCatalog;
     const currentCatalog = modelCatalog.current(DRIVER_KIND);
-    const mergedEnv = yield* mergeProviderInstanceEnvironment(environment);
+    const mergedEnv = yield* mergeProviderInstanceEnvironment(
+      environment,
+      yield* HostProcess.Environment,
+    );
     const openRouter = OpenRouter.instanceSupport(yield* OpenRouter.OpenRouter, {
       instanceId,
       driverKind: DRIVER_KIND,
@@ -167,23 +170,17 @@ export const CodexDriver: ProviderDriver<
     // A managed instance folds the override into its launch args instead.
     const { T3CODE_CODEX_LAUNCH_ARGS: _launchArgsOverride, ...managedEnv } = mergedEnv;
     const processEnv = openRouter.managed ? managedEnv : mergedEnv;
-    const homeLayout = yield* resolveCodexHomeLayout(config);
-    const homeContinuationIdentity = codexContinuationIdentity(homeLayout);
-    const continuationIdentity = {
-      ...homeContinuationIdentity,
-      continuationKey: openRouter.continuationKey(homeContinuationIdentity.continuationKey),
-    };
-    const processEnv = yield* mergeProviderInstanceEnvironment(
-      environment,
-      yield* HostProcess.Environment,
-    );
     const environmentHome = processEnv.CODEX_HOME;
     const homeLayout = yield* resolveCodexHomeLayout(
       !config.homePath.trim() && !config.shadowHomePath.trim() && environmentHome?.trim()
         ? { ...config, homePath: environmentHome }
         : config,
     );
-    const continuationIdentity = codexContinuationIdentity(homeLayout);
+    const homeContinuationIdentity = codexContinuationIdentity(homeLayout);
+    const continuationIdentity = {
+      ...homeContinuationIdentity,
+      continuationKey: openRouter.continuationKey(homeContinuationIdentity.continuationKey),
+    };
     const stampIdentity = withInstanceIdentity({
       instanceId,
       driverKind: DRIVER_KIND,

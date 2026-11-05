@@ -196,7 +196,6 @@ export const ComposerPromptHeight = Schema.Int.check(
 export type ComposerPromptHeight = typeof ComposerPromptHeight.Type;
 export const DEFAULT_COMPOSER_PROMPT_HEIGHT_PX: ComposerPromptHeight = 78;
 
-export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
 // "artwork" follows the running channel and shows nothing on Latest. The fixed artwork
 // modes let any channel opt into a specific channel's art.
 export const EnvironmentIdentificationMode = Schema.Literals([

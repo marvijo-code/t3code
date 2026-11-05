@@ -218,16 +218,13 @@ function mapSecretFieldGroups(
       ) as EasDeviceHostConfig,
   );
 
-  const openRouterSecret = map({
-    secretName: "openrouter-api-key",
-    kind: "field",
-    value: settings.openRouter.apiKey,
-    redacted: settings.openRouter.apiKey === SECRET_REDACTED,
-    sensitive: true,
-  });
-  const openRouter = {
-    apiKey: openRouterSecret.redacted ? SECRET_REDACTED : openRouterSecret.value,
-  };
+  // The key is a single slot, not a per-host field group, but mapFields already handles
+  // redaction and the value mapper that each caller supplies.
+  const openRouter = mapFields(
+    { apiKey: settings.openRouter.apiKey },
+    ["apiKey"],
+    () => "openrouter-api-key",
+  ) as { apiKey: string };
   // Its own prefix: an EAS and a Simlock host may share an id.
   const simlockDeviceHosts = settings.simlockDeviceHosts.map(
     (host) =>
