@@ -125,7 +125,9 @@ const managedEnvironment = (
       { name: "OPENROUTER_API_KEY", value: apiKey, sensitive: true },
       {
         name: "OPENCODE_CONFIG_CONTENT",
-        value: withOpenRouterAttributionConfig(inlineConfig?.value),
+        value: withOpenRouterAttributionConfig(
+          typeof inlineConfig?.value === "string" ? inlineConfig.value : undefined,
+        ),
         sensitive: false,
       },
     ];

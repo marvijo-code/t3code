@@ -3,12 +3,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 
+import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -27,6 +29,13 @@ const layers = (input: {
 }) =>
   ServerSettings.layer.pipe(
     Layer.provideMerge(ServerSecretStore.layer),
+    Layer.provide(ManagedPolicy.layerTest()),
+    Layer.provideMerge(
+      Layer.succeed(
+        SecureRandom.SecureRandom,
+        SecureRandom.make((size) => new Uint8Array(size).fill(8)),
+      ),
+    ),
     Layer.provideMerge(Layer.fresh(SqlitePersistence.layerMemory)),
     Layer.provideMerge(
       Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: input.prefix })),

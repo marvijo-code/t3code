@@ -293,7 +293,7 @@ describe("OpenRouter attribution", () => {
     const openCodeConfig = next.providerInstances[openCodeId]!.environment!.find(
       (variable) => variable.name === "OPENCODE_CONFIG_CONTENT",
     );
-    expect(JSON.parse(openCodeConfig!.value)).toEqual({
+    expect(JSON.parse(openCodeConfig!.value as string)).toEqual({
       provider: { openrouter: { options: { headers: { ...OPENROUTER_ATTRIBUTION_HEADERS } } } },
     });
   });

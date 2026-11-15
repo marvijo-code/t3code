@@ -167,8 +167,12 @@ export const layerTest = (models: ReadonlyArray<OpenRouterCatalogModel> = []) =>
     current: Effect.succeed(models),
     models: Effect.succeed(models),
     invalidateModels: Effect.void,
-    configure: () => Effect.die("OpenRouter.configure is not available in this test"),
-    testConnection: () => Effect.die("OpenRouter.testConnection is not available in this test"),
+    configure: Effect.fn("OpenRouter.configure")(() =>
+      Effect.die("OpenRouter.configure is not available in this test"),
+    ),
+    testConnection: Effect.fn("OpenRouter.testConnection")(() =>
+      Effect.die("OpenRouter.testConnection is not available in this test"),
+    ),
   });
 
 export const make = Effect.gen(function* () {
@@ -236,7 +240,7 @@ export const make = Effect.gen(function* () {
         const updated = yield* serverSettings.updateSettings(
           resolveOpenRouterSettingsPatch(current, input),
         );
-        return redactServerSettingsForClient(updated);
+        return redactServerSettingsForClient(updated, { secretReferences: false });
       }),
     );
 
@@ -304,7 +308,9 @@ export const make = Effect.gen(function* () {
       lastAttemptMs = null;
     }),
     configure,
-    testConnection: (input) => testSemaphore.withPermits(1)(testConnection(input)),
+    testConnection: Effect.fn("OpenRouter.testConnection")((input: OpenRouterConnectionTestInput) =>
+      testSemaphore.withPermits(1)(testConnection(input)),
+    ),
   });
 });
 

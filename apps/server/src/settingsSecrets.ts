@@ -242,7 +242,7 @@ function mapSecretFieldGroups(
     ["apiKey"],
     () => "openrouter-api-key",
   ) as { apiKey: string };
-  // Its own prefix: an EAS and a Simlock host may share an id.
+  // Its own prefix: an Expo and a Simlock host may share an id.
   const simlockDeviceHosts = settings.simlockDeviceHosts.map(
     (host) =>
       mapFields(
