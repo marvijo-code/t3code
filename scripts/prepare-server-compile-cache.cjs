@@ -63,21 +63,6 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
       `require(${JSON.stringify(helper)}).generatePreparedServerCache(${JSON.stringify(resources)}).then(()=>process.exit(0),e=>{console.error(e);process.exit(1)})`,
     );
     result = spawnSync(executable, [runner], { env, encoding: "utf8", timeout: 120000 });
-    if (electronPlatformName === "win32") {
-      // Windows can hold the just-executed image briefly; wait until electron-builder can edit it.
-      const deadline = Date.now() + 15000;
-      for (;;) {
-        try {
-          const handle = fs.openSync(executable, "r+");
-          fs.closeSync(handle);
-          break;
-        } catch {
-          if (Date.now() > deadline)
-            throw new Error(`Timed out waiting for ${executable} to be writable`);
-          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-        }
-      }
-    }
   } finally {
     fs.rmSync(state, { recursive: true, force: true });
   }
