@@ -14,7 +14,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
 import { describeOpenRouterConnectionTest, readOpenRouterState } from "./OpenRouterSettings.logic";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 /**
@@ -28,6 +28,7 @@ export function OpenRouterSettings({
   readonly environmentId: EnvironmentId;
   readonly readOnly: boolean;
 }) {
+  const searchableSetting = useSearchableSetting();
   const settings = useEnvironmentSettings(environmentId);
   const supported =
     useAtomValue(serverEnvironment.configValueAtom(environmentId))?.environment.capabilities
