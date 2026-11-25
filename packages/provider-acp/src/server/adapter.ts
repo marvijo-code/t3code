@@ -449,6 +449,8 @@ export interface AcpAdapterV2Flavor {
   readonly mcpOverHttp?: boolean;
   /** The agent has no tool search of its own, so T3 lists optional tools on demand. */
   readonly deferMcpTools?: boolean;
+  /** The agent drops session MCP tools over ~600 bytes, so T3 compacts `tools/list` entries. */
+  readonly compactMcpSchemas?: boolean;
   readonly normalizeSessionUpdate?: (
     notification: EffectAcpSchema.SessionNotification,
   ) => EffectAcpSchema.SessionNotification;
@@ -1085,6 +1087,7 @@ function acpMcpContext(
   self: SelfInvocation,
   mcpOverHttp: boolean | undefined,
   deferMcpTools: boolean | undefined,
+  compactMcpSchemas: boolean | undefined,
   callLauncher: string | undefined,
 ): AcpMcpContext {
   if (session === undefined) {
@@ -1116,6 +1119,9 @@ function acpMcpContext(
                 { name: "Authorization", value: session.authorizationHeader },
                 ...(deferMcpTools === true
                   ? [{ name: McpProviderSession.MCP_TOOL_EXPOSURE_HEADER, value: "deferred" }]
+                  : []),
+                ...(compactMcpSchemas === true
+                  ? [{ name: McpProviderSession.MCP_TOOL_SCHEMA_HEADER, value: "compact" }]
                   : []),
               ],
             },
@@ -2085,13 +2091,27 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
   const readMcpContext = (threadId: ThreadId | null) =>
     threadId === null
       ? Effect.succeed(
-          acpMcpContext(undefined, self, flavor.mcpOverHttp, flavor.deferMcpTools, callLauncher),
+          acpMcpContext(
+            undefined,
+            self,
+            flavor.mcpOverHttp,
+            flavor.deferMcpTools,
+            flavor.compactMcpSchemas,
+            callLauncher,
+          ),
         )
       : mcpSessions
           .read(threadId)
           .pipe(
             Effect.map((session) =>
-              acpMcpContext(session, self, flavor.mcpOverHttp, flavor.deferMcpTools, callLauncher),
+              acpMcpContext(
+                session,
+                self,
+                flavor.mcpOverHttp,
+                flavor.deferMcpTools,
+                flavor.compactMcpSchemas,
+                callLauncher,
+              ),
             ),
           );
   const driver = flavor.driver;

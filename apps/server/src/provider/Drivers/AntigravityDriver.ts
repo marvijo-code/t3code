@@ -437,7 +437,10 @@ export const AntigravityDriver: ProviderDriver<
               }),
           ),
         );
-      const { spawn } = yield* prepareSpawn(cwd, processEnvironment);
+      const { spawn } = yield* prepareSpawn(cwd, {
+        ...processEnvironment,
+        SSH_CONNECTION: processEnvironment.SSH_CONNECTION || "127.0.0.1 0 127.0.0.1 0",
+      });
       const failed = (detail: string, cause?: unknown) =>
         new ProviderSetupError({ instanceId, operation: "start", detail, cause });
       // Without a display it prints the link only, instead of opening a browser on this machine.

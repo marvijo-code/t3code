@@ -7,6 +7,13 @@ import type * as Effect from "effect/Effect";
  */
 export const MCP_TOOL_EXPOSURE_HEADER = "t3-tool-exposure";
 
+/**
+ * Sent by MCP clients with a strict per-tool schema size limit (such as Antigravity ACP, which
+ * drops session MCP tools over ~600 bytes). The T3 MCP server compacts `tools/list` definitions
+ * to fit while keeping full server-side schema validation on `tools/call`.
+ */
+export const MCP_TOOL_SCHEMA_HEADER = "t3-tool-schema";
+
 export interface McpProviderSessionConfig {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;

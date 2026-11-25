@@ -86,6 +86,7 @@ export interface AntigravityProfile {
   readonly geminiHome: string;
   readonly acpDirectory: string;
   readonly tokenPath: string;
+  readonly hasFileToken?: boolean;
   readonly tempDirectory: string;
   readonly browserCommand: string;
   readonly caBundlePath?: string;
@@ -228,8 +229,9 @@ function antigravityEnvironment(
       ? { SSL_CERT_FILE: profile.caBundlePath }
       : {}),
     // The 1.5 CLI ignores AGY_ACP_FORCE_FILE_STORAGE and keeps Google sign-ins in one OS keyring
-    // entry for every profile, unless it believes it runs over SSH. Sign-in then uses `--login`.
-    ...(auth.authMethod === "oauth-personal"
+    // entry for every profile, unless it believes it runs over SSH. Keep existing OS-keyring
+    // logins working when this profile has no file token yet.
+    ...(auth.authMethod === "oauth-personal" && profile.hasFileToken !== false
       ? { SSH_CONNECTION: baseEnv.SSH_CONNECTION || "127.0.0.1 0 127.0.0.1 0" }
       : {}),
     GEMINI_HOME: profile.geminiHome,
@@ -462,11 +464,14 @@ export const prepareAntigravityProfile = Effect.fn("prepareAntigravityProfile")(
       }
     }
   }
+  const tokenPath = path.join(acpDirectory, "acp_token.json");
+  const hasFileToken = yield* fs.exists(tokenPath).pipe(Effect.orElseSucceed(() => false));
   const profile: AntigravityProfile = {
     platform,
     geminiHome,
     acpDirectory,
-    tokenPath: path.join(acpDirectory, "acp_token.json"),
+    tokenPath,
+    hasFileToken,
     tempDirectory,
     browserCommand,
     ...(caBundlePath === undefined ? {} : { caBundlePath }),

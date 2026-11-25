@@ -109,3 +109,206 @@ const compact = (schema: Json, optional: boolean): Json => {
  */
 export const advertisedJsonSchema = (tool: Tool.Any) =>
   compact(Tool.getJsonSchema(tool), false) as ReturnType<typeof Tool.getJsonSchema>;
+
+/** Per-tool byte ceiling for Antigravity ACP session MCP tools (drops tools above ~600 bytes). */
+export const COMPACT_MCP_TOOL_MAX_BYTES = 520;
+
+interface CompactableMcpTool {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputSchema?: Json;
+  readonly [key: string]: Json;
+}
+
+const serializedToolBytes = (tool: CompactableMcpTool): number =>
+  Buffer.byteLength(
+    JSON.stringify({
+      name: tool.name,
+      description: tool.description ?? "",
+      parameters: tool.inputSchema ?? { type: "object" },
+    }),
+    "utf8",
+  );
+
+const STRIPPED_SCHEMA_KEYS = new Set([
+  "description",
+  "minimum",
+  "maximum",
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "pattern",
+  "default",
+  "additionalProperties",
+]);
+
+const TARGET_KEY_SUBSET = ["providerInstanceId", "model", "options", "environmentId"] as const;
+
+const stripSchemaForLimit = (schema: Json, level: 1 | 2 | 3): Json => {
+  if (Array.isArray(schema)) return schema.map((item) => stripSchemaForLimit(item, level));
+  if (!Predicate.isObject(schema)) return schema;
+  if (Array.isArray(schema.anyOf)) {
+    const objectBranch = schema.anyOf.find(
+      (branch) => Predicate.isObject(branch) && branch.type === "object",
+    );
+    return stripSchemaForLimit(objectBranch ?? schema.anyOf[0] ?? { type: "object" }, level);
+  }
+  const out: JsonObject = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (STRIPPED_SCHEMA_KEYS.has(key)) continue;
+    if (level >= 2 && key === "enum") continue;
+    if (key === "properties" && Predicate.isObject(value)) {
+      out[key] = Object.fromEntries(
+        Object.entries(value).map(([propName, propSchema]) => {
+          if (level >= 3 && Predicate.isObject(propSchema)) {
+            if (propSchema.type === "object") {
+              if (propName === "target" && Predicate.isObject(propSchema.properties)) {
+                const kept = TARGET_KEY_SUBSET.filter((k) => k in (propSchema.properties as JsonObject));
+                return [
+                  propName,
+                  {
+                    type: "object",
+                    properties: Object.fromEntries(
+                      kept.map((k) => [k, { type: k === "options" ? "object" : "string" }]),
+                    ),
+                  },
+                ];
+              }
+              return [propName, { type: "object" }];
+            }
+            if (propSchema.type === "array") {
+              const itemType =
+                Predicate.isObject(propSchema.items) && typeof propSchema.items.type === "string"
+                  ? propSchema.items.type
+                  : "string";
+              return [propName, { type: "array", items: { type: itemType } }];
+            }
+          }
+          return [propName, stripSchemaForLimit(propSchema, level)];
+        }),
+      );
+    } else {
+      out[key] = stripSchemaForLimit(value, level);
+    }
+  }
+  return out;
+};
+
+const shortenDescription = (text: string | undefined, max: number): string => {
+  const value = (text ?? "").trim();
+  if (value.length <= max) return value;
+  const firstSentence = value.split(". ", 1)[0] ?? value;
+  if (firstSentence.length + 1 <= max) return `${firstSentence}.`;
+  return `${value.slice(0, Math.max(1, max - 1)).trimEnd()}.`;
+};
+
+export const compactMcpToolForByteLimit = <T extends CompactableMcpTool>(
+  tool: T,
+  maxBytes: number = COMPACT_MCP_TOOL_MAX_BYTES,
+): T => {
+  if (serializedToolBytes(tool) <= maxBytes) return tool;
+
+  const attempt1: T = { ...tool, inputSchema: stripSchemaForLimit(tool.inputSchema, 1) };
+  if (serializedToolBytes(attempt1) <= maxBytes) return attempt1;
+
+  const attempt2: T = {
+    ...tool,
+    description: shortenDescription(tool.description, 72),
+    inputSchema: stripSchemaForLimit(tool.inputSchema, 2),
+  };
+  if (serializedToolBytes(attempt2) <= maxBytes) return attempt2;
+
+  const attempt3: T = {
+    ...tool,
+    description: shortenDescription(tool.description, 32),
+    inputSchema: stripSchemaForLimit(tool.inputSchema, 3),
+  };
+  if (serializedToolBytes(attempt3) <= maxBytes) return attempt3;
+
+  const props =
+    Predicate.isObject(tool.inputSchema) && Predicate.isObject(tool.inputSchema.properties)
+      ? tool.inputSchema.properties
+      : {};
+  const bareProperties: JsonObject = {};
+  for (const [propName, propSchema] of Object.entries(props)) {
+    const propType =
+      Predicate.isObject(propSchema) && typeof propSchema.type === "string"
+        ? propSchema.type
+        : "string";
+    bareProperties[propName] = { type: propType };
+  }
+  const required =
+    Predicate.isObject(tool.inputSchema) && Array.isArray(tool.inputSchema.required)
+      ? tool.inputSchema.required
+      : undefined;
+  const attempt4: T = {
+    ...tool,
+    description: shortenDescription(tool.description, 28),
+    inputSchema: {
+      type: "object",
+      ...(required === undefined ? {} : { required }),
+      properties: bareProperties,
+    },
+  };
+  if (serializedToolBytes(attempt4) <= maxBytes) return attempt4;
+
+  return {
+    ...tool,
+    description: shortenDescription(tool.description, 24),
+    inputSchema: { type: "object" },
+  };
+};
+
+const compactToolsListJsonMessage = (
+  rawJson: string,
+  maxBytes: number,
+): string | undefined => {
+  if (!rawJson.includes('"tools"')) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    return undefined;
+  }
+  if (!Predicate.isObject(parsed) || !Predicate.isObject(parsed.result)) return undefined;
+  const tools = parsed.result.tools;
+  if (!Array.isArray(tools)) return undefined;
+  let changed = false;
+  const nextTools = tools.map((entry) => {
+    if (!Predicate.isObject(entry) || typeof entry.name !== "string") return entry;
+    const compacted = compactMcpToolForByteLimit(entry as CompactableMcpTool, maxBytes);
+    if (compacted !== entry) changed = true;
+    return compacted;
+  });
+  if (!changed) return undefined;
+  return JSON.stringify({
+    ...parsed,
+    result: { ...parsed.result, tools: nextTools },
+  });
+};
+
+/** Rewrites JSON or SSE `tools/list` MCP responses so every tool fits under `maxBytes`. */
+export const compactToolsListJsonRpcPayload = (
+  payload: string,
+  maxBytes: number = COMPACT_MCP_TOOL_MAX_BYTES,
+): string | undefined => {
+  if (!payload.includes('"tools"')) return undefined;
+  const trimmed = payload.trimStart();
+  if (trimmed.startsWith("{")) {
+    return compactToolsListJsonMessage(payload, maxBytes);
+  }
+  let changed = false;
+  const rewritten = payload
+    .split("\n")
+    .map((line) => {
+      if (!line.startsWith("data:")) return line;
+      const prefixLength = line.startsWith("data: ") ? 6 : 5;
+      const next = compactToolsListJsonMessage(line.slice(prefixLength), maxBytes);
+      if (next === undefined) return line;
+      changed = true;
+      return `${line.slice(0, prefixLength)}${next}`;
+    })
+    .join("\n");
+  return changed ? rewritten : undefined;
+};

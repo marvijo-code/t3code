@@ -51,7 +51,10 @@ import {
   MAX_REPORTED_DEPTH,
   toolOutcome,
 } from "../telemetry/ProviderDimensions.ts";
-import { advertisedJsonSchema } from "./advertisedJsonSchema.ts";
+import {
+  advertisedJsonSchema,
+  compactToolsListJsonRpcPayload,
+} from "./advertisedJsonSchema.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpToolAccess from "./McpToolAccess.ts";
 import * as McpToolExposure from "./McpToolExposure.ts";
@@ -59,7 +62,10 @@ import * as McpWebhookTransport from "./McpWebhookTransport.ts";
 import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
 import { compactT3McpToolOutput } from "@t3tools/shared/toolOutput";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
-import { MCP_TOOL_EXPOSURE_HEADER } from "@t3tools/provider-core/server/mcpSession";
+import {
+  MCP_TOOL_EXPOSURE_HEADER,
+  MCP_TOOL_SCHEMA_HEADER,
+} from "@t3tools/provider-core/server/mcpSession";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import * as PreviewControlsHandlers from "./toolkits/previewControls/handlers.ts";
@@ -182,6 +188,41 @@ const normalizeMcpHttpResponse = (
   return response.status === 200 && bodyIsEmpty
     ? HttpServerResponse.setStatus(response, 202)
     : response;
+};
+
+const utf8Decoder = new TextDecoder();
+const utf8Encoder = new TextEncoder();
+
+const compactToolsListHttpResponse = (
+  response: HttpServerResponse.HttpServerResponse,
+  request: HttpServerRequest.HttpServerRequest,
+): HttpServerResponse.HttpServerResponse => {
+  if (request.headers[MCP_TOOL_SCHEMA_HEADER] !== "compact" || response.status !== 200) {
+    return response;
+  }
+  const body = response.body;
+  if (body._tag === "Uint8Array") {
+    const rewritten = compactToolsListJsonRpcPayload(utf8Decoder.decode(body.body));
+    return rewritten === undefined
+      ? response
+      : HttpServerResponse.setBody(
+          response,
+          HttpBody.uint8Array(utf8Encoder.encode(rewritten), body.contentType),
+        );
+  }
+  if (body._tag === "Stream") {
+    const compactedStream = body.stream.pipe(
+      Stream.decodeText(),
+      Stream.splitLines,
+      Stream.map((line) => `${compactToolsListJsonRpcPayload(line) ?? line}\n`),
+      Stream.encodeText,
+    );
+    return HttpServerResponse.setBody(
+      response,
+      HttpBody.stream(compactedStream, body.contentType),
+    );
+  }
+  return response;
 };
 
 // The first protocol is the fallback for clients that offer an unknown version.
@@ -402,6 +443,7 @@ const makeMcpAuthMiddleware = Effect.gen(function* () {
     return yield* httpEffect.pipe(
       Effect.provideService(McpInvocationContext.McpInvocationContext, admitted),
       Effect.map(normalizeMcpHttpResponse),
+      Effect.map((response) => compactToolsListHttpResponse(response, request)),
       Effect.map((response) => endWithSession(response, request, admitted.client)),
       Effect.map((response) =>
         linkExpiresAt === undefined
